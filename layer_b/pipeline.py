@@ -448,6 +448,9 @@ def _doc_confidence(raw: dict) -> tuple[str, str, float]:
         except (KeyError, TypeError):
             pass
     weight = _continuous_weight(info_loss)
+    # 全掃描文件降權（OCR 準確率低於正常文件）
+    if raw.get("extractor_metadata", {}).get("is_fully_scanned"):
+        weight = weight * 0.8
     if weight >= 0.97:
         level = "high"
     elif weight >= 0.80:
@@ -737,6 +740,84 @@ def _figure_path(raw: dict, source_tool: str, doc_prefix: str, doc_metadata: dic
     return units
 
 
+def _high_graphics_path(
+    raw: dict,
+    doc_prefix: str,
+    norm_tool: str,
+    doc_metadata: dict | None = None,
+) -> list[RetrievalUnit]:
+    """為有 page_image 但無任何 figure RetrievalUnit 的頁面生成文件級 RetrievalUnit。
+
+    目的：讓癌症診療指引的流程圖/決策樹頁面可被 RAG 查詢命中。
+    """
+    data = raw.get("data", {})
+    page_images = data.get("page_images", {})
+    figures = data.get("figures", [])
+
+    if not page_images:
+        return []
+
+    # 找出有明確 figure 的頁面（這些頁面 _figure_path 已處理）
+    pages_with_figures: set[int] = set()
+    for fig in figures:
+        if fig.get("has_image"):
+            page = _parse_source_page(fig.get("source", ""))
+            if page is not None:
+                pages_with_figures.add(page)
+
+    confidence_level, quality_flag, retrieval_weight = _doc_confidence(raw)
+
+    page_context_map = _build_page_context_map(data, norm_tool)
+
+    units: list[RetrievalUnit] = []
+    for page_key, img_info in page_images.items():
+        try:
+            page = int(page_key)
+        except (ValueError, TypeError):
+            continue
+
+        if page in pages_with_figures:
+            continue  # 已由 _figure_path 處理
+
+        # img_info may be a dict {"path": ..., "has_image": ...} or a plain str path
+        if isinstance(img_info, dict):
+            if not img_info.get("has_image"):
+                continue
+            img_path = img_info.get("path", "")
+        elif isinstance(img_info, str):
+            img_path = img_info
+        else:
+            continue
+
+        # 用鄰近段落文字作為 embedding_text（讓查詢可命中）
+        context = page_context_map.get(page, "")
+        embedding_text = f"[流程圖/圖表 第{page}頁]" + (f" {context}" if context else "")
+
+        unit_id = f"{doc_prefix}_hg_{page:03d}" if doc_prefix else f"hg_{page:03d}"
+
+        units.append(RetrievalUnit(
+            retrieval_unit_id=unit_id,
+            source_tool=norm_tool,
+            embedding_text=embedding_text,
+            structured_json={
+                "type": "document",
+                "label": "high_graphics",
+                "page": page,
+                "content": embedding_text,
+            },
+            display_markdown=f"![page_{page}]({img_path})" if img_path else "",
+            confidence_level=confidence_level,
+            quality_flag=quality_flag,
+            retrieval_weight=retrieval_weight * 0.9,  # 輕微降權，因無直接文字
+            source_pages=[page],
+            page_image_refs={str(page): img_path} if img_path else {},
+            row_texts=[],
+            doc_metadata=doc_metadata or {},
+        ))
+
+    return units
+
+
 def _document_path(raw: dict) -> list[RetrievalUnit]:
     docs = adapt(raw, "vision_llm")
     units: list[RetrievalUnit] = []
@@ -785,7 +866,9 @@ def process_document(raw: dict) -> list[RetrievalUnit]:
     units = []
     units.extend(_table_path(raw, source_tool, doc_prefix, doc_metadata))
     units.extend(_paragraph_path(raw, source_tool, doc_prefix, doc_metadata))
+    norm_tool = _normalize_source_tool(source_tool)
     units.extend(_figure_path(raw, source_tool, doc_prefix, doc_metadata))
+    units.extend(_high_graphics_path(raw, doc_prefix, norm_tool, doc_metadata))
     vision_desc = raw.get("vision_description", "")
     if vision_desc:
         from dataclasses import replace

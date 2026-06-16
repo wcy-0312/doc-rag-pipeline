@@ -524,6 +524,8 @@ def convert_pdf_azure_cu(
     metadata["confidence"] = confidence
     metadata["qc"]         = qc
 
+    pages_no_words = confidence.get("pages_no_words", []) if isinstance(confidence, dict) else []
+
     return {
         "schema_version": "v3.0",
         "metadata": metadata,
@@ -563,5 +565,6 @@ def convert_pdf_azure_cu(
             ),
             "known_limitation":    None,
             "fallback_reason":     "cu_api_failed" if _cu_api_error else None,
+            "is_fully_scanned":    len(pages_no_words) == page_count and page_count > 0,
         },
     }
