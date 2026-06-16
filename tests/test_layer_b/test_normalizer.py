@@ -1,7 +1,7 @@
 import sys, os
 
 from layer_b.models import IRCell, IRTable, QC
-from layer_b.normalizers.normalizer import expand_spans
+from layer_b.normalizers.merger import expand_spans
 
 
 def _make_cell(row, col, content, row_span=1, col_span=1,
