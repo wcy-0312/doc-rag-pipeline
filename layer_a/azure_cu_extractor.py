@@ -1,0 +1,567 @@
+"""
+azure_cu_extractor.py — CU API Adapter（schema-v3.0）
+
+轉換層職責：PDF → CU API 原始結構 + 圖片裁切 + QC 量化。
+
+CU API 原始輸出直接保留：
+  paragraphs[]  — 所有段落（含 role/content/source/span）
+  tables[]      — 所有表格（含 cells/rowSpan/columnSpan）
+  figures[]     — 所有圖像（含 bbox/caption + path/sha256，裁切後填入）
+  sections[]    — 文件樹（element 引用有效）
+  pages[]       — 每頁（含 words/lines + 信心分數）
+  hyperlinks[]  — 超連結
+
+另外計算：
+  confidence    — 從 pages[].words[] 彙總信心統計
+  qc            — 資訊損失量化（text/page/figure 各維度 + 綜合評分）
+  metadata      — 標準四層
+
+不輸出：blocks / chunks（由後續層負責）
+
+CU API endpoint：settings.azure_cu_endpoint（config.env）
+analyzer_id    ：prebuilt-layout
+"""
+
+from __future__ import annotations
+import base64, re, hashlib, sys
+from pathlib import Path
+
+# config.py 在 lib/ 的上層目錄
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# 機構名稱關鍵字：跳過這類「title」段落，改用 sectionHeading 作為文件標題
+_INSTITUTION_RE = re.compile(r'醫院|大學|醫學|學院|Hospital|University|Medical|Institute')
+
+# 這些類別的 PDF 全頁儲存截圖，確保含算法圖/流程表的頁面也有 page_image_refs
+_FULL_PAGE_SAVE_CATEGORIES: frozenset[str] = frozenset({
+    "癌症診療指引", "臨床指引", "diagnostic_guideline",
+})
+
+_NUM = r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+_SOURCE_RE = re.compile(
+    rf"D\((\d+),({_NUM}),({_NUM}),({_NUM}),({_NUM}),({_NUM}),({_NUM}),({_NUM}),({_NUM})\)"
+)
+
+
+# ── confidence 計算 ───────────────────────────────────────────────────────
+
+def _compute_confidence(raw: dict) -> dict:
+    """從 pages[].words[] 計算每頁及整體信心統計。
+
+    無 words 的頁面（純圖像頁或空白頁）avg_confidence 設為 None，
+    不假設為 1.0，避免掩蓋真實問題。
+    """
+    all_confs: list[float] = []
+    page_stats: list[dict] = []
+    pages_no_words: list[int] = []
+
+    for p in raw.get("pages", []):
+        page_no = p.get("pageNumber", len(page_stats) + 1)
+        words   = p.get("words", [])
+        confs   = [w["confidence"] for w in words if "confidence" in w]
+        if confs:
+            avg      = round(sum(confs) / len(confs), 3)
+            low_cnt  = sum(1 for c in confs if c < 0.5)
+            low_rate = round(low_cnt / len(confs), 3)
+        else:
+            avg, low_cnt, low_rate = None, 0, None
+            pages_no_words.append(page_no)
+        page_stats.append({
+            "page_no":              page_no,
+            "word_count":           len(words),
+            "avg_confidence":       avg,
+            "low_confidence_count": low_cnt,
+            "low_confidence_rate":  low_rate,
+        })
+        all_confs.extend(confs)
+
+    if all_confs:
+        word_avg  = round(sum(all_confs) / len(all_confs), 3)
+        low_rate  = round(sum(1 for c in all_confs if c < 0.5) / len(all_confs), 3)
+    else:
+        word_avg, low_rate = None, None
+
+    return {
+        "source":              "ocr_azure_cu",
+        "available":           True,
+        "word_avg":            word_avg,
+        "low_confidence_rate": low_rate,
+        "pages_no_words":      pages_no_words,
+        "page_stats":          page_stats,
+    }
+
+
+# ── 圖片裁切 ─────────────────────────────────────────────────────────────
+
+def _figure_bbox(source_str: str) -> tuple[int, float, float, float, float] | None:
+    """D(page,...) → (page_no, x_min, y_min, x_max, y_max) in inches。"""
+    first = str(source_str).split(";")[0]
+    m = _SOURCE_RE.match(first)
+    if not m:
+        return None
+    page_no = int(m.group(1))
+    coords  = [float(m.group(i)) for i in range(2, 10)]
+    xs = [coords[0], coords[2], coords[4], coords[6]]
+    ys = [coords[1], coords[3], coords[5], coords[7]]
+    return page_no, min(xs), min(ys), max(xs), max(ys)
+
+
+def _materialize_figures(
+    pdf_path: Path,
+    figures: list[dict],
+    output_dir: Path,
+    page_dims: dict[int, tuple[float, float]] | None = None,
+) -> list[dict]:
+    """所有 figures 裁切存檔，回傳帶 path/sha256/has_image/area_sqin 的新 figures list。
+
+    page_dims: {page_no: (cu_width_in, cu_height_in)} 來自 CU API pages[]。
+    有此資訊時使用真實頁面尺寸換算比例，否則 fallback 到 Letter（8.5×11 inch）。
+    """
+    import fitz
+
+    img_dir = output_dir / "figures"
+    img_dir.mkdir(parents=True, exist_ok=True)
+
+    doc = fitz.open(str(pdf_path))
+    result = []
+
+    try:
+        for seq, fig in enumerate(figures, 1):
+            fig_out = dict(fig)
+            source  = str(fig.get("source", "") or "")
+            parsed  = _figure_bbox(source)
+
+            if parsed is None:
+                fig_out.update({"path": None, "sha256": None,
+                                "has_image": False, "area_sqin": 0.0})
+                result.append(fig_out)
+                continue
+
+            page_no, x_min, y_min, x_max, y_max = parsed
+            w_in  = round(x_max - x_min, 3)
+            h_in  = round(y_max - y_min, 3)
+            area  = round(w_in * h_in, 3)
+            fig_out["area_sqin"] = area
+
+            page_idx = page_no - 1
+            if page_idx >= len(doc):
+                fig_out.update({"path": None, "sha256": None, "has_image": False})
+                result.append(fig_out)
+                continue
+
+            page = doc[page_idx]
+            # 使用 CU API 回傳的真實頁面尺寸（inches）換算比例
+            # fallback 到 Letter（8.5 inch）
+            if page_dims and page_no in page_dims:
+                cu_w, cu_h = page_dims[page_no]
+            else:
+                cu_w, cu_h = 8.5, 11.0
+            scale_x = page.rect.width  / cu_w
+            scale_y = page.rect.height / cu_h
+
+            rect = fitz.Rect(
+                x_min * scale_x, y_min * scale_y,
+                x_max * scale_x, y_max * scale_y,
+            ) & page.rect
+
+            if rect.is_empty:
+                fig_out.update({"path": None, "sha256": None, "has_image": False})
+                result.append(fig_out)
+                continue
+
+            pixmap    = page.get_pixmap(clip=rect, dpi=150)
+            png_bytes = pixmap.tobytes("png")
+            sha256    = hashlib.sha256(png_bytes).hexdigest()
+
+            png_path = img_dir / f"{pdf_path.stem}_p{page_no}_f{seq}.png"
+            pixmap.save(str(png_path))
+
+            fig_out.update({
+                "path":      str(png_path.relative_to(output_dir)),
+                "sha256":    sha256,
+                "has_image": True,
+            })
+            result.append(fig_out)
+    finally:
+        doc.close()
+
+    return result
+
+
+def _save_page_images(
+    pdf_path: Path,
+    figures: list[dict],
+    confidence: dict,
+    output_dir: Path,
+    category: str = "",
+    page_count: int = 0,
+) -> dict[int, dict]:
+    """視覺頁面的整頁圖片存檔。
+
+    觸發條件（任一）：
+    - 頁面有 area_sqin >= 2.0 的 figure（流程圖、圖表）
+    - 頁面無文字（pages_no_words → 掃描頁）
+    - category 屬於 _FULL_PAGE_SAVE_CATEGORIES（臨床指引等含算法流程表的文件）
+
+    Returns: {page_no: {"path": str, "sha256": str, "has_image": bool}}
+    """
+    if output_dir is None:
+        return {}
+
+    import fitz
+
+    visual_pages: set[int] = set()
+    for fig in figures:
+        if fig.get("has_image") and fig.get("area_sqin", 0) >= 2.0:
+            source = str(fig.get("source", "") or "")
+            parsed = _figure_bbox(source)
+            if parsed:
+                visual_pages.add(parsed[0])
+
+    for page_no in confidence.get("pages_no_words", []):
+        visual_pages.add(page_no)
+
+    # Clinical guidelines may have algorithm tables (not figures) — save all pages
+    if category in _FULL_PAGE_SAVE_CATEGORIES and page_count > 0:
+        for pn in range(1, page_count + 1):
+            visual_pages.add(pn)
+
+    if not visual_pages:
+        return {}
+
+    img_dir = output_dir / "figures"
+    img_dir.mkdir(parents=True, exist_ok=True)
+
+    page_images: dict[int, dict] = {}
+    doc = fitz.open(str(pdf_path))
+    try:
+        for page_no in sorted(visual_pages):
+            page_idx = page_no - 1
+            if page_idx >= len(doc):
+                continue
+            pixmap   = doc[page_idx].get_pixmap(dpi=150)
+            png_bytes = pixmap.tobytes("png")
+            sha256   = hashlib.sha256(png_bytes).hexdigest()
+            fpath    = img_dir / f"{pdf_path.stem}_p{page_no}_full.png"
+            if not fpath.exists():
+                fpath.write_bytes(png_bytes)
+            page_images[page_no] = {
+                "path":      str(fpath.relative_to(output_dir)),
+                "sha256":    sha256,
+                "has_image": True,
+            }
+    finally:
+        doc.close()
+
+    return page_images
+
+
+# ── QC 量化 ──────────────────────────────────────────────────────────────
+
+def _compute_qc(
+    raw: dict,
+    confidence: dict,
+    figures: list[dict],
+    _cu_api_error: str | None,
+    output_dir_set: bool = False,
+    pdf_path: Path | None = None,
+) -> dict:
+    """量化轉換過程的資訊損失。
+
+    真正新增的資訊（非可由其他欄位算出）：
+      figures_materialized — 實際存了幾張圖
+      pages_unreadable     — 平均信心 < 0.5 的頁
+      estimated_info_loss_rate — 綜合損失率
+      qc_level             — good / warning / danger
+    """
+    page_stats  = confidence.get("page_stats", [])
+    pages_total = len(page_stats) or len(raw.get("pages", [])) or 1
+
+    # unreadable_pages：avg_confidence 不為 None 且 < 0.5（OCR 品質差）
+    unreadable_pages = [
+        p["page_no"] for p in page_stats
+        if p.get("avg_confidence") is not None and p["avg_confidence"] < 0.5
+    ]
+    # pages_no_words：無任何 words（純圖像頁或空白頁）— 同樣代表資訊損失
+    # 兩者合計才能正確反映 page_loss；之前只算 unreadable 會讓圖像頁的 QC 虛報 good
+    no_word_pages  = confidence.get("pages_no_words", [])
+    all_bad_pages  = sorted(set(unreadable_pages) | set(no_word_pages))
+    pages_unreadable = len(all_bad_pages)
+
+    # figures
+    figures_total        = len(figures)
+    figures_materialized = sum(1 for f in figures if f.get("has_image"))
+    # 有意義尺寸（area ≥ 2 sqin）：logo/header 不算損失
+    figures_meaningful   = sum(1 for f in figures if f.get("area_sqin", 0) >= 2.0)
+    meaningful_materialized = sum(
+        1 for f in figures
+        if f.get("has_image") and f.get("area_sqin", 0) >= 2.0
+    )
+
+    # 損失率計算
+    text_loss = confidence.get("low_confidence_rate") or 0.0
+    page_loss = round(pages_unreadable / pages_total, 4)
+    if output_dir_set and figures_meaningful > 0:
+        figure_loss = round(1 - meaningful_materialized / figures_meaningful, 4)
+    else:
+        figure_loss = 0.0
+
+    estimated_loss = round(
+        0.6 * text_loss + 0.3 * page_loss + 0.1 * figure_loss, 4
+    )
+    qc_level = (
+        "danger"  if estimated_loss > 0.10 else
+        "warning" if estimated_loss > 0.03 else
+        "good"
+    )
+
+    # 小字體偵測：臨床關鍵數值若以 <8pt 呈現，OCR 精準度可能下降
+    small_font_pages: list[int] = []
+    try:
+        import fitz as _fitz_sf
+        if pdf_path is None:
+            raise ValueError("no path")
+        _doc_sf = _fitz_sf.open(str(pdf_path))
+        for _pi in range(_doc_sf.page_count):
+            _rawdict = _doc_sf[_pi].get_text("rawdict")
+            for _blk in _rawdict.get("blocks", []):
+                for _ln in _blk.get("lines", []):
+                    for _sp in _ln.get("spans", []):
+                        if _sp.get("size", 99) < 8 and _sp.get("text", "").strip():
+                            small_font_pages.append(_pi + 1)
+                            break
+                    else:
+                        continue
+                    break
+        _doc_sf.close()
+    except Exception:
+        pass
+
+    warnings_list = ["AZURE_CU_ERROR"] if _cu_api_error else []
+    if small_font_pages:
+        warnings_list.append(
+            f"SMALL_FONT_PAGES {sorted(set(small_font_pages))}: "
+            "<8pt 文字（臨床分期/劑量值），OCR 精準度可能下降。"
+        )
+
+    return {
+        "figures_total":           figures_total,
+        "figures_materialized":    figures_materialized,
+        "figures_meaningful":      figures_meaningful,
+        "unreadable_pages":        all_bad_pages,
+        "pages_unreadable":        pages_unreadable,
+        "estimated_info_loss_rate": estimated_loss,
+        "qc_level":                qc_level,
+        "warnings":                warnings_list,
+        "errors": (
+            [{"stage": "cu_api_call", "message": _cu_api_error}]
+            if _cu_api_error else []
+        ),
+    }
+
+
+# ── 主入口 ───────────────────────────────────────────────────────────────────
+
+def convert_pdf_azure_cu(
+    pdf_path: Path,
+    category: str = "",
+    output_dir: Path | None = None,
+    keywords: list[str] | None = None,
+) -> dict:
+    """CU API path：PDF → structured JSON（schema-v3.0）。
+
+    CU API 原始輸出最小轉換後直接保留，並裁切圖片存檔。
+
+    Args:
+        pdf_path   : PDF 檔案路徑
+        category   : 文件類別
+        output_dir : 圖片輸出根目錄（None = 不存圖，figures[].path 為 null）
+
+    Returns:
+        schema-v3.0 dict
+    """
+    # ── 1. 呼叫 CU API ────────────────────────────────────────────────
+    pdf_bytes = pdf_path.read_bytes()
+    b64 = base64.b64encode(pdf_bytes).decode()
+
+    raw: dict = {}
+    _cu_api_error: str | None = None
+
+    try:
+        from azure.ai.contentunderstanding import ContentUnderstandingClient
+        from azure.core.credentials import AzureKeyCredential
+        from azure.identity import DefaultAzureCredential
+        from config import settings
+
+        endpoint   = settings.azure_cu_endpoint
+        api_key    = settings.azure_cu_api_key
+        credential = (AzureKeyCredential(api_key)
+                      if api_key and api_key != "unused"
+                      else DefaultAzureCredential())
+
+        client = ContentUnderstandingClient(endpoint=endpoint, credential=credential)
+        result = client.begin_analyze(
+            analyzer_id="prebuilt-layout",
+            body={"inputs": [{"data": b64, "mimeType": "application/pdf"}]},
+        ).result()
+
+        if hasattr(result, "contents") and result.contents:
+            raw = result.contents[0].as_dict()
+        else:
+            _cu_api_error = "empty contents"
+
+    except ImportError as e:
+        _cu_api_error = f"SDK not installed: {e}"
+    except Exception as e:
+        _cu_api_error = str(e)
+
+    # ── 2. confidence ────────────────────────────────────────────────
+    confidence = _compute_confidence(raw) if raw and not _cu_api_error else {
+        "source": "ocr_azure_cu", "available": False,
+        "note": _cu_api_error or "CU API unavailable",
+    }
+
+    # ── 3. 圖片裁切 ──────────────────────────────────────────────────
+    # 從 CU API pages[] 取得各頁真實尺寸（inches），供圖片裁切比例換算
+    page_dims: dict[int, tuple[float, float]] = {
+        p["pageNumber"]: (p["width"], p["height"])
+        for p in raw.get("pages", [])
+        if p.get("pageNumber") and p.get("width") and p.get("height")
+    }
+
+    raw_figures = raw.get("figures", [])
+    if output_dir and raw_figures and not _cu_api_error:
+        figures = _materialize_figures(pdf_path, raw_figures, output_dir, page_dims)
+    else:
+        # 不裁切時，補充 area_sqin 但 path/sha256 為 null
+        figures = []
+        for fig in raw_figures:
+            f = dict(fig)
+            parsed = _figure_bbox(str(fig.get("source", "") or ""))
+            if parsed:
+                _, x_min, y_min, x_max, y_max = parsed
+                f["area_sqin"] = round((x_max - x_min) * (y_max - y_min), 3)
+            else:
+                f["area_sqin"] = 0.0
+            f["path"]      = None
+            f["sha256"]    = None
+            f["has_image"] = False
+            figures.append(f)
+
+    # ── 4. QC 量化 ───────────────────────────────────────────────────
+    qc = _compute_qc(raw, confidence, figures, _cu_api_error,
+                     output_dir_set=output_dir is not None,
+                     pdf_path=pdf_path)
+
+    # ── 5. metadata ──────────────────────────────────────────────────
+    # CU API 失敗時用 fitz 取得真實頁數，避免 fallback 成誤導性的 1
+    cu_page_count = len(raw.get("pages", []))
+    if cu_page_count:
+        page_count = cu_page_count
+    else:
+        try:
+            import fitz as _fitz
+            _d = _fitz.open(str(pdf_path))
+            page_count = _d.page_count
+            _d.close()
+        except Exception:
+            page_count = 0
+
+    # 從段落萃取文件標題（四層策略）
+    # 1. title role，但跳過機構名稱（院名/校名）
+    # 2. 「主題名稱」後的 body paragraph（護理 SOP 格式）
+    # 3. 第一個 sectionHeading
+    # 4. fallback → None（metadata_builder 用檔名）
+    paras = raw.get("paragraphs", [])
+    title_para = None
+
+    # 策略 1：title role，非機構名稱
+    for p in paras:
+        if p.get("role") == "title":
+            content = (p.get("content") or "").strip()
+            if content and not _INSTITUTION_RE.search(content):
+                title_para = content
+                break
+
+    # 策略 2：「主題名稱」後的 body paragraph（SOP 表格格式）
+    if not title_para:
+        for i, p in enumerate(paras):
+            content = (p.get("content") or "").strip()
+            if content == "主題名稱":
+                for j in range(i + 1, min(i + 3, len(paras))):
+                    nxt = (paras[j].get("content") or "").strip()
+                    if nxt and len(nxt) >= 3:
+                        title_para = nxt
+                        break
+                if title_para:
+                    break
+
+    # 策略 3：第一個 sectionHeading（通用 fallback）
+    if not title_para:
+        for p in paras:
+            if p.get("role") == "sectionHeading":
+                content = (p.get("content") or "").strip()
+                if content:
+                    title_para = content
+                    break
+    from metadata_builder import build_metadata
+    metadata = build_metadata(
+        pdf_path=pdf_path,
+        category=category,
+        extractor="azure_cu",
+        page_count=page_count,
+        title=title_para,
+        keywords=keywords,
+    )
+
+    # ── 6. 整頁圖片（流程圖、掃描頁）──────────────────────────────────────
+    page_images = _save_page_images(
+        pdf_path, figures, confidence, output_dir,
+        category=category, page_count=page_count,
+    ) if not _cu_api_error else {}
+
+    # ── 7. 組合 schema-v3.0 output（metadata + data 兩層）───────────────
+    metadata["confidence"] = confidence
+    metadata["qc"]         = qc
+
+    return {
+        "schema_version": "v3.0",
+        "metadata": metadata,
+        "data": {
+            "markdown":     (raw.get("markdown", "") if not _cu_api_error
+                             else f"[CU API error: {_cu_api_error}]"),
+            "paragraphs":   raw.get("paragraphs",   []),
+            "tables":       raw.get("tables",        []),
+            "figures":      figures,
+            "sections":     raw.get("sections",      []),
+            "pages":        raw.get("pages",         []),
+            "hyperlinks":   raw.get("hyperlinks",    []),
+            "annotations":  raw.get("annotations",   []),
+            "page_images":  page_images,
+        },
+        "page_count": page_count,
+        "extractor_metadata": {
+            "tool":                "azure_content_understanding",
+            "analyzer_id":         "prebuilt-layout",
+            "api_version":         "2024-12-01-preview",
+            "parsing_mode":        None,
+            "version":             "1.1.0",
+            "confidence_source":   (
+                "pages[].words[].confidence（word-level，彙總為 per-page 及整體統計）"
+            ),
+            "per_cell_confidence": False,
+            "confidence_note": (
+                "Azure CU SDK（prebuilt-layout）實測不輸出 per-cell confidence；"
+                "tables[].cells[] 無 confidence 欄位。"
+                "word_avg 來自 pages[].words[].confidence 彙總。"
+            ),
+            "header_flags": (
+                "kind 欄位（'columnHeader' / 'rowHeader' / 'content'）"
+            ),
+            "bounding_box_format": (
+                "D(page, x0,y0, x1,y1, x2,y2, x3,y3)（inches，polygon 格式）"
+            ),
+            "known_limitation":    None,
+            "fallback_reason":     "cu_api_failed" if _cu_api_error else None,
+        },
+    }
