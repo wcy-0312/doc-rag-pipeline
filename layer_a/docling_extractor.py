@@ -298,6 +298,32 @@ def convert_pdf_docling(
 
     suffix = pdf_path.suffix.lower()
 
+    # .doc → .docx conversion via LibreOffice
+    if suffix == ".doc":
+        import subprocess, tempfile
+        with tempfile.TemporaryDirectory() as _tmpdir:
+            result = subprocess.run(
+                ["libreoffice", "--headless", "--convert-to", "docx",
+                 "--outdir", _tmpdir, str(pdf_path)],
+                capture_output=True, timeout=60,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"libreoffice conversion failed: {result.stderr.decode()}"
+                )
+            _converted = Path(_tmpdir) / (Path(pdf_path).stem + ".docx")
+            if not _converted.exists():
+                raise FileNotFoundError(f"Converted file not found: {_converted}")
+            # Recurse with the converted .docx (won't enter this branch again)
+            return convert_pdf_docling(
+                _converted,
+                llm=llm,
+                category=category,
+                output_dir=output_dir,
+                describe_visuals=describe_visuals,
+                keywords=keywords,
+            )
+
     # XLS：docling 不支援，直接用 xlrd fallback
     if suffix == ".xls":
         try:

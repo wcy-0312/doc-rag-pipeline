@@ -17,3 +17,32 @@ def get_extractor(tool: str):
         return convert_pdf_llm
     else:
         raise ValueError(f"Unknown extractor tool: {tool!r}. Choose: azure_cu, azure_di, docling, llm")
+
+
+def get_extractor_for_file(path) -> str:
+    """根據副檔名自動回傳應使用的 extractor 名稱。
+
+    Returns a tool name string suitable for get_extractor().
+    """
+    from pathlib import Path
+    suffix = Path(path).suffix.lower()
+    _ROUTING = {
+        ".pdf":  "azure_cu",
+        ".docx": "docling",
+        ".doc":  "docling",
+        ".xlsx": "docling",
+        ".xls":  "docling",
+        ".pptx": "docling",
+        ".jpg":  "azure_di",
+        ".jpeg": "azure_di",
+        ".png":  "azure_di",
+        ".tiff": "azure_di",
+        ".tif":  "azure_di",
+    }
+    tool = _ROUTING.get(suffix)
+    if tool is None:
+        raise ValueError(
+            f"Unsupported file extension {suffix!r}. "
+            f"Supported: {sorted(_ROUTING.keys())}"
+        )
+    return tool
