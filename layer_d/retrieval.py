@@ -77,9 +77,32 @@ class HybridRetriever:
         self,
         client: Optional[QdrantClient] = None,
         collection_name: str = _COLLECTION,
+        reranker=None,
     ) -> None:
         self.client = client or QdrantClient(host=_HOST, port=_PORT)
         self.collection_name = collection_name
+        self._reranker = reranker
+
+    def _make_doc_filter(self, doc_ids: List[str]) -> Filter:
+        """Return a Qdrant Filter that restricts results to chunks from any of the given doc_ids."""
+        conditions = [
+            FieldCondition(key="chunk_id", match=MatchText(text=f"{stem}__"))
+            for stem in doc_ids
+        ]
+        if len(conditions) == 1:
+            return Filter(must=conditions)
+        return Filter(should=conditions)  # multiple docs: OR condition
+
+    def make_doc_filter(self, doc_stem: str) -> Filter:
+        """Return a Qdrant Filter that restricts results to chunks from doc_stem."""
+        return Filter(
+            must=[
+                FieldCondition(
+                    key="chunk_id",
+                    match=MatchText(text=f"{doc_stem}__"),
+                )
+            ]
+        )
 
     def search(
         self,
@@ -90,7 +113,7 @@ class HybridRetriever:
         min_retrieval_weight: float = 0.3,
         filter_chunk_types: Optional[List[str]] = None,
         include_parent_context: bool = False,
-        doc_filter: Optional[Filter] = None,
+        doc_ids: Optional[List[str]] = None,
     ) -> List[RankedResult]:
         """Hybrid dense+sparse search with RRF fusion and retrieval_weight weighting."""
         must_conditions = [
@@ -107,8 +130,14 @@ class HybridRetriever:
                 )
             )
         base_filter = Filter(must=must_conditions)
-        if doc_filter is not None:
-            query_filter = Filter(must=[*base_filter.must, *doc_filter.must])
+        if doc_ids is not None:
+            doc_filter = self._make_doc_filter(doc_ids)
+            if len(doc_filter.must or []) > 0:
+                query_filter = Filter(must=[*base_filter.must, *doc_filter.must])
+            elif len(doc_filter.should or []) > 0:
+                query_filter = Filter(must=base_filter.must, should=doc_filter.should)
+            else:
+                query_filter = base_filter
         else:
             query_filter = base_filter
 
@@ -152,39 +181,36 @@ class HybridRetriever:
         min_retrieval_weight: float = 0.3,
         filter_chunk_types: Optional[List[str]] = None,
         include_parent_context: bool = False,
-        doc_filter: Optional[Filter] = None,
+        doc_ids: Optional[List[str]] = None,
+        rerank: bool = True,
     ) -> List[RankedResult]:
         """Convenience method: encode query text then call search()."""
         dense, sparse = _encode_query(query_text)
+        fetch_k = prefetch_k if (self._reranker and rerank) else top_k
         if prefetch_k > top_k:
             try:
                 total = self.client.count(
                     collection_name=self.collection_name, exact=True
                 ).count
                 prefetch_k = max(top_k, min(prefetch_k, total))
+                fetch_k = prefetch_k if (self._reranker and rerank) else top_k
             except Exception:
                 pass
-        return self.search(
+        results = self.search(
             query_dense=dense,
             query_sparse=sparse,
-            top_k=top_k,
+            top_k=fetch_k,
             prefetch_k=prefetch_k,
             min_retrieval_weight=min_retrieval_weight,
             filter_chunk_types=filter_chunk_types,
             include_parent_context=include_parent_context,
-            doc_filter=doc_filter,
+            doc_ids=doc_ids,
         )
-
-    def make_doc_filter(self, doc_stem: str) -> Filter:
-        """Return a Qdrant Filter that restricts results to chunks from doc_stem."""
-        return Filter(
-            must=[
-                FieldCondition(
-                    key="chunk_id",
-                    match=MatchText(text=f"{doc_stem}__"),
-                )
-            ]
-        )
+        if self._reranker and rerank:
+            results = self._reranker.rerank(query_text, results, top_k=top_k)
+        else:
+            results = results[:top_k]
+        return results
 
     def _aggregate_parent_context(
         self, results: List[RankedResult]

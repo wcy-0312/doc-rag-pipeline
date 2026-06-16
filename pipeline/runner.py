@@ -28,8 +28,8 @@ class RAGPipeline:
     Usage
     -----
     1. Prepare a raw document dict from layer_a extractor:
-       >>> from layer_a.azure_cu_extractor import convert_pdf_azure_cu
-       >>> raw = convert_pdf_azure_cu(pdf_path, ...)
+       >>> from layer_a import get_extractor
+       >>> raw = get_extractor("azure_cu")(pdf_path, ...)
 
     2. Instantiate and ingest:
        >>> pipeline = RAGPipeline(provider, qdrant_client, "my_collection")
@@ -47,6 +47,7 @@ class RAGPipeline:
         collection_name: str,
         llm_client=None,
         abstention_threshold: float = 0.10,
+        reranker=None,
     ):
         """
         Parameters
@@ -64,7 +65,11 @@ class RAGPipeline:
         abstention_threshold:
             Minimum rerank_score to answer; below this the pipeline abstains.
             Set to 0.0 when no reranker is deployed.
+        reranker:
+            BGEReranker instance (or compatible). Defaults to BGEReranker() if None.
         """
+        from layer_d.reranker import BGEReranker
+        _reranker = reranker if reranker is not None else BGEReranker()
         self._provider = embedding_provider
         self._ingester = DocumentIngester(
             client=qdrant_client,
@@ -73,6 +78,7 @@ class RAGPipeline:
         self._retriever = HybridRetriever(
             client=qdrant_client,
             collection_name=collection_name,
+            reranker=_reranker,
         )
         self._gen = GenerationPipeline(
             llm_client=llm_client,
@@ -101,7 +107,7 @@ class RAGPipeline:
 
     # ── Query (D + E) ─────────────────────────────────────────────────────
 
-    def query(self, query_text: str, top_k: int = 5, prefetch_k: int = 20):
+    def query(self, query_text: str, top_k: int = 5, prefetch_k: int = 20, rerank: bool = True):
         """Retrieve evidence and generate a grounded answer.
 
         Parameters
@@ -112,6 +118,8 @@ class RAGPipeline:
             Number of ranked results to pass to generation.
         prefetch_k:
             Number of candidates fetched before RRF fusion.
+        rerank:
+            Whether to apply the cross-encoder reranker. Default True.
 
         Returns
         -------
@@ -123,6 +131,6 @@ class RAGPipeline:
             .safety_verdict — "safe" | "needs_review" | "abstained"
         """
         ranked = self._retriever.search_text(
-            query_text, top_k=top_k, prefetch_k=prefetch_k
+            query_text, top_k=top_k, prefetch_k=prefetch_k, rerank=rerank
         )                                                 # D: hybrid retrieval
         return self._gen.run(query_text, ranked)          # E: generation
