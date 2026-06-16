@@ -151,11 +151,11 @@ class RerankedRetriever:
             min_retrieval_weight=min_retrieval_weight,
             filter_chunk_types=filter_chunk_types,
             include_parent_context=include_parent_context,
+            rerank=True,
         )
 
         if len(detected_docs) >= 2:
             for doc_stem in detected_docs:
-                doc_filter = self._hybrid.make_doc_filter(doc_stem)
                 sub_candidates = self._hybrid.search_text(
                     query_text=query_text,
                     top_k=10,
@@ -163,7 +163,8 @@ class RerankedRetriever:
                     min_retrieval_weight=min_retrieval_weight,
                     filter_chunk_types=filter_chunk_types,
                     include_parent_context=include_parent_context,
-                    doc_filter=doc_filter,
+                    doc_ids=[doc_stem],
+                    rerank=False,
                 )
                 candidates.extend(sub_candidates)
 
@@ -238,8 +239,8 @@ def build_retriever(
 
     logger.info("build_retriever: total %d points in collection '%s'", total_ingested, collection_name)
 
-    hybrid = HybridRetriever(client=client, collection_name=collection_name)
     reranker = BGEReranker(model_name=reranker_model)
+    hybrid = HybridRetriever(client=client, collection_name=collection_name, reranker=reranker)
     return RerankedRetriever(hybrid=hybrid, reranker=reranker, prefetch_k=prefetch_k)
 
 
