@@ -1,7 +1,7 @@
 import sys, os
 
 from layer_b.models import IRCell, IRTable, QC
-from layer_b.normalizers.confidence import assess
+from layer_b.pipeline import assess
 
 
 def _cell(conf=None, header_source="flag", is_col_header=False, is_row_header=False):
