@@ -745,25 +745,21 @@ def _high_graphics_path(
     doc_prefix: str,
     norm_tool: str,
     doc_metadata: dict | None = None,
+    covered_pages: set[int] | None = None,
 ) -> list[RetrievalUnit]:
-    """為有 page_image 但無任何 figure RetrievalUnit 的頁面生成文件級 RetrievalUnit。
+    """為有 page_image 但無任何其他 RetrievalUnit 的頁面生成文件級 RetrievalUnit。
 
     目的：讓癌症診療指引的流程圖/決策樹頁面可被 RAG 查詢命中。
+    covered_pages: 已由 table/paragraph/figure path 生成 unit 的頁碼集合，這些頁面不重複生成。
     """
     data = raw.get("data", {})
     page_images = data.get("page_images", {})
-    figures = data.get("figures", [])
 
     if not page_images:
         return []
 
-    # 找出有明確 figure 的頁面（這些頁面 _figure_path 已處理）
-    pages_with_figures: set[int] = set()
-    for fig in figures:
-        if fig.get("has_image"):
-            page = _parse_source_page(fig.get("source", ""))
-            if page is not None:
-                pages_with_figures.add(page)
+    # 已被前面三個 path 處理過的頁面，直接跳過
+    pages_with_figures: set[int] = covered_pages or set()
 
     confidence_level, quality_flag, retrieval_weight = _doc_confidence(raw)
 
@@ -868,7 +864,8 @@ def process_document(raw: dict) -> list[RetrievalUnit]:
     units.extend(_paragraph_path(raw, source_tool, doc_prefix, doc_metadata))
     norm_tool = _normalize_source_tool(source_tool)
     units.extend(_figure_path(raw, source_tool, doc_prefix, doc_metadata))
-    units.extend(_high_graphics_path(raw, doc_prefix, norm_tool, doc_metadata))
+    _covered = {p for u in units for p in (u.source_pages or [])}
+    units.extend(_high_graphics_path(raw, doc_prefix, norm_tool, doc_metadata, covered_pages=_covered))
     vision_desc = raw.get("vision_description", "")
     if vision_desc:
         from dataclasses import replace
