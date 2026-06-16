@@ -79,6 +79,17 @@ def generate(
 
     safety_verdict = guardrail.compute_safety_verdict(False, unsupported_claims, llm_abstain)
 
+    # 若答案有引用掃描文件來源，附加警語
+    _scanned_sources = [
+        r.chunk_id for r in ranked_results
+        if r.metadata.get("is_fully_scanned")
+    ]
+    if _scanned_sources and not llm_abstain:
+        answer += (
+            "\n\n⚠️ 注意：本答案部分內容來自掃描影像文件（OCR 辨識），"
+            "手寫欄位準確率約 60%，建議核對原始文件。"
+        )
+
     return GenerationResult(
         answer=answer,
         claims=claims,
