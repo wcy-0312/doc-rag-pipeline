@@ -226,15 +226,34 @@ def _save_page_images(
         for pn in range(1, page_count + 1):
             visual_pages.add(pn)
 
-    if not visual_pages:
-        return {}
-
-    img_dir = output_dir / "figures"
-    img_dir.mkdir(parents=True, exist_ok=True)
-
-    page_images: dict[int, dict] = {}
     doc = fitz.open(str(pdf_path))
     try:
+        # Trigger 4: pages with large embedded images not captured by CU API figures[]
+        # (e.g., BIOSTD EKG waveforms, 放射治療計畫 Report Snapshots)
+        for page_idx in range(len(doc)):
+            page_no_check = page_idx + 1
+            if page_no_check in visual_pages:
+                continue
+            try:
+                p = doc[page_idx]
+                for img_info in p.get_image_info():
+                    bbox = img_info.get("bbox")  # (x0, y0, x1, y1) in points
+                    if bbox:
+                        w_in = (bbox[2] - bbox[0]) / 72.0
+                        h_in = (bbox[3] - bbox[1]) / 72.0
+                        if w_in * h_in >= 2.0:
+                            visual_pages.add(page_no_check)
+                            break
+            except Exception:
+                pass
+
+        if not visual_pages:
+            return {}
+
+        img_dir = output_dir / "figures"
+        img_dir.mkdir(parents=True, exist_ok=True)
+
+        page_images: dict[int, dict] = {}
         for page_no in sorted(visual_pages):
             page_idx = page_no - 1
             if page_idx >= len(doc):
@@ -254,6 +273,80 @@ def _save_page_images(
         doc.close()
 
     return page_images
+
+
+def _detect_checkbox_states(doc, page_no: int) -> list[dict]:
+    """偵測 PDF 頁面中 checkbox 的勾選狀態。
+
+    策略 1：PDF AcroForm widget（page.widgets()）— 直接讀取邏輯值
+    策略 2：空間比對 □（U+25A1）字符 × black_filled vector drawings
+    """
+    try:
+        import fitz
+        page = doc[page_no - 1]
+        results: list[dict] = []
+
+        # Strategy 1: AcroForm widgets
+        try:
+            for w in page.widgets():
+                if w.field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
+                    checked = (w.field_value == w.on_state())
+                    results.append({
+                        "label_text": w.field_label or "",
+                        "bbox": list(w.rect),
+                        "checked": checked,
+                        "method": "acroform",
+                    })
+        except Exception:
+            pass
+
+        # Strategy 2: Visual detection (fallback when AcroForm not available)
+        if not results:
+            # Collect □ character positions
+            square_chars: list[tuple] = []  # (bbox, nearby_text)
+            try:
+                rawdict = page.get_text("rawdict")
+                for block in rawdict.get("blocks", []):
+                    for line in block.get("lines", []):
+                        line_text = "".join(s.get("text", "") for s in line.get("spans", []))
+                        for span in line.get("spans", []):
+                            for char in span.get("chars", []):
+                                if char.get("c") == "□":  # □
+                                    square_chars.append((char["bbox"], line_text.strip()))
+            except Exception:
+                pass
+
+            # Collect black-filled drawings
+            black_drawings: list = []
+            try:
+                for drawing in page.get_drawings():
+                    fill = drawing.get("fill")
+                    if fill is not None and all(c <= 0.15 for c in fill):
+                        black_drawings.append(drawing["rect"])
+            except Exception:
+                pass
+
+            # Spatial overlap: IoT (Intersection over Target) >= 0.3
+            for sq_bbox, nearby_text in square_chars:
+                sq_rect = fitz.Rect(sq_bbox)
+                sq_area = abs(sq_rect)
+                checked = False
+                if sq_area > 0:
+                    for dr_rect in black_drawings:
+                        inter = sq_rect & dr_rect
+                        if abs(inter) / sq_area >= 0.3:
+                            checked = True
+                            break
+                results.append({
+                    "label_text": nearby_text,
+                    "bbox": list(sq_rect),
+                    "checked": checked,
+                    "method": "visual",
+                })
+
+        return results
+    except Exception:
+        return []
 
 
 # ── QC 量化 ──────────────────────────────────────────────────────────────
@@ -520,6 +613,19 @@ def convert_pdf_azure_cu(
         category=category, page_count=page_count,
     ) if not _cu_api_error else {}
 
+    # ── 6b. Checkbox 狀態偵測 ─────────────────────────────────────────────
+    checkbox_states_by_page: dict[int, list[dict]] = {}
+    try:
+        import fitz as _fitz_cb
+        _cb_doc = _fitz_cb.open(str(pdf_path))
+        for _pno in range(1, page_count + 1):
+            _states = _detect_checkbox_states(_cb_doc, _pno)
+            if _states:
+                checkbox_states_by_page[_pno] = _states
+        _cb_doc.close()
+    except Exception:
+        pass
+
     # ── 7. 組合 schema-v3.0 output（metadata + data 兩層）───────────────
     metadata["confidence"] = confidence
     metadata["qc"]         = qc
@@ -540,6 +646,7 @@ def convert_pdf_azure_cu(
             "hyperlinks":   raw.get("hyperlinks",    []),
             "annotations":  raw.get("annotations",   []),
             "page_images":  page_images,
+            "checkbox_states": checkbox_states_by_page,
         },
         "page_count": page_count,
         "extractor_metadata": {
