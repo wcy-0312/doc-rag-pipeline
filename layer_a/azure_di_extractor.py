@@ -86,13 +86,16 @@ def _generate_vision_description(img_path: Path) -> str:
                      "text": (
                          "這張照片的主體文件是什麼？"
                          "請描述主體文件的完整內容，包含所有可見文字、數值、表格資料與結構。"
+                         "若文件含有核取方塊選項（□ 或 ☑ 或手寫打勾標記），請依序列出每個選項並標示勾選狀態："
+                         "[已選] 選項文字 或 [未選] 選項文字。"
+                         "勾選判斷規則：方框內有任何 ✓ √ V X 或手寫筆觸 = 已選；方框內完全空白 = 未選。"
                          "若照片中有多份文件或背景雜訊，只描述最主要的那份，忽略背景。"
                          "請用繁體中文回答。"
                      )},
                 ],
             }],
             temperature=0.0,
-            max_tokens=800,
+            max_tokens=2000,
         )
         return (resp.choices[0].message.content or "").strip()
 
@@ -563,6 +566,15 @@ def convert_image_azure_di(
         if VISION_DESCRIPTION_ENABLED and not _di_api_error
         else ""
     )
+
+    # P3: 若 OCR 和 Vision 雙雙為空，升為 danger（靜默空白文件）
+    if total_text_chars < 50 and not vision_description:
+        qc = dict(qc)  # 避免 mutate 原始 dict
+        qc["qc_level"] = "danger"
+        warnings = list(qc.get("warnings", []))
+        if "VISION_AND_OCR_BOTH_EMPTY" not in warnings:
+            warnings.append("VISION_AND_OCR_BOTH_EMPTY")
+        qc["warnings"] = warnings
 
     # ── 9. 組合 schema-v3.0 output ───────────────────────────────────────
     return {
