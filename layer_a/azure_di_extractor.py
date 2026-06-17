@@ -84,12 +84,13 @@ def _generate_vision_description(img_path: Path) -> str:
                      "image_url": {"url": f"data:{mime};base64,{b64}"}},
                     {"type": "text",
                      "text": (
-                         "這張照片的主體文件是什麼？"
-                         "請描述主體文件的完整內容，包含所有可見文字、數值、表格資料與結構。"
-                         "若文件含有核取方塊選項（□ 或 ☑ 或手寫打勾標記），請依序列出每個選項並標示勾選狀態："
-                         "[已選] 選項文字 或 [未選] 選項文字。"
-                         "勾選判斷規則：方框內有任何 ✓ √ V X 或手寫筆觸 = 已選；方框內完全空白 = 未選。"
-                         "若照片中有多份文件或背景雜訊，只描述最主要的那份，忽略背景。"
+                         "請描述這張照片中所有可見的資訊，依序回答以下各項（無相關內容則略過該項）：\n"
+                         "1. 可見文字與數值：逐字轉錄照片中所有文字、數字、單位、標籤\n"
+                         "2. 影像主體：描述主要視覺對象（例如傷口外觀、解剖位置、設備型號與顯示狀態）\n"
+                         "3. 結構化資料：表格內容、圖表數值、量測讀值\n"
+                         "4. 核取方塊：列出每個選項並標示 [已選] 或 [未選]"
+                         "（判斷規則：方框內有任何 ✓ √ V X 或手寫筆觸 = 已選；完全空白 = 未選）\n"
+                         "5. 影像品質：清晰 / 模糊 / 部分遮擋\n"
                          "請用繁體中文回答。"
                      )},
                 ],
@@ -150,44 +151,6 @@ def _compute_confidence(raw: dict) -> dict:
         "page_stats":          page_stats,
     }
 
-
-# ── 修補 styles 欄位（camelCase → snake_case）───────────────────────────────
-
-def _patch_styles(styles: list[dict]) -> list[dict]:
-    """Azure DI as_dict() 回傳 isHandwritten（camelCase），統一正規化為 is_handwritten。
-
-    SDK 的 as_dict() 對 DocumentStyle 保留 JSON wire 格式（isHandwritten），
-    但 Python 慣例是 snake_case。修補後讓下游 adapter 可直接用 is_handwritten 讀取。
-    """
-    result = []
-    for s in styles:
-        s_out = dict(s)
-        if "isHandwritten" in s_out:
-            s_out["is_handwritten"] = s_out.pop("isHandwritten")
-        result.append(s_out)
-    return result
-
-
-# ── 修補表格欄位（per-cell confidence 明確設為 null）────────────────────────
-
-def _patch_tables(tables: list[dict]) -> list[dict]:
-    """將 tables[].cells[].confidence 明確設為 null。
-
-    Azure DI image mode 不提供 per-cell confidence。
-    計畫書 §4.4 Step 2：此欄位明確標記為 null，讓下游 Structure-aware Layer
-    知道這是「無資料」而非「信心=0」。
-    """
-    patched = []
-    for tbl in tables:
-        tbl_out = dict(tbl)
-        cells_out = []
-        for cell in tbl.get("cells", []):
-            c = dict(cell)
-            c["confidence"] = None  # image mode 無 per-cell confidence
-            cells_out.append(c)
-        tbl_out["cells"] = cells_out
-        patched.append(tbl_out)
-    return patched
 
 
 # ── 儲存原始圖片（page_images fallback）────────────────────────────────────
@@ -502,21 +465,13 @@ def convert_image_azure_di(
         "note":      _di_api_error or "Azure DI API unavailable",
     }
 
-    # ── 3. 修補欄位 ──────────────────────────────────────────────────────
-    raw_tables  = raw.get("tables", [])
-    tables      = _patch_tables(raw_tables)
-    styles      = _patch_styles(raw.get("styles", []))
-
     # ── 3b. Figure 裁切（需 Pillow + output_dir）────────────────────────
     raw_figures = raw.get("figures", [])
     if output_dir and raw_figures and not _di_api_error:
         raw_figures = _crop_figures(raw_figures, raw.get("pages", []), img_path, output_dir)
 
     # ── 4. Markdown 生成 ─────────────────────────────────────────────────
-    raw_with_patched = dict(raw)
-    raw_with_patched["tables"] = tables
-    raw_with_patched["figures"] = raw_figures
-    markdown = _build_markdown(raw_with_patched)
+    markdown = _build_markdown(raw)
 
     # ── 5. page_images：永遠儲存原始圖片 ────────────────────────────────
     page_images: dict[int, dict] = {}
@@ -553,13 +508,20 @@ def convert_image_azure_di(
         category=category,
         extractor="azure_di",
         page_count=page_count,
-        title=title_para,
         markdown=markdown if not _di_api_error else "",
         llm=llm,
     )
 
-    metadata["confidence"] = confidence
-    metadata["qc"]         = qc
+    metadata["qc"] = {
+        "qc_level":                 qc["qc_level"],
+        "estimated_info_loss_rate": qc["estimated_info_loss_rate"],
+    }
+    metadata["extractor_metadata"] = {
+        "tool":             "azure_document_intelligence",
+        "api_version":      "2024-11-30",
+        "is_fully_scanned": False,
+        "warnings":         qc.get("warnings", []),
+    }
 
     # ── 8. Vision LLM 描述（照片主體文件，供 B 層 embedding_text 使用）────
     vision_description = (
@@ -576,52 +538,23 @@ def convert_image_azure_di(
         if "VISION_AND_OCR_BOTH_EMPTY" not in warnings:
             warnings.append("VISION_AND_OCR_BOTH_EMPTY")
         qc["warnings"] = warnings
+        # 同步更新 metadata flat metadata
+        metadata["qc"]["qc_level"] = "danger"
+        metadata["extractor_metadata"]["warnings"] = warnings
 
     # ── 9. 組合 schema-v3.0 output ───────────────────────────────────────
+    _API_KEYS = {"api_version", "model_id", "string_index_type"}
+    raw_content = {k: v for k, v in raw.items() if k not in _API_KEYS}
+
     return {
         "schema_version": "v3.0",
         "metadata": metadata,
         "data": {
-            "markdown":    markdown if not _di_api_error else f"[Azure DI error: {_di_api_error}]",
-            "paragraphs":  raw.get("paragraphs", []),
-            "tables":      tables,
+            **raw_content,
             "figures":     raw_figures,
-            "pages":       raw.get("pages",      []),
-            "styles":      styles,
-            "hyperlinks":  raw.get("keyValuePairs", []),  # DI 圖片模式無 hyperlinks，改存 keyValuePairs
+            "markdown":    markdown if not _di_api_error else f"[Azure DI error: {_di_api_error}]",
             "page_images": page_images,
+            "vision_description": vision_description,
         },
         "page_count": page_count,
-        "vision_description": vision_description,
-        "extractor_metadata": {
-            "tool":                "azure_document_intelligence",
-            "analyzer_id":         "prebuilt-layout",
-            "api_version":         "2024-11-30",
-            "parsing_mode":        None,
-            "version":             "1.0.2",
-            "confidence_source": (
-                "pages[].words[].confidence（word-level，彙總為 per-page 統計）"
-                if not _di_api_error else None
-            ),
-            "per_cell_confidence": False,
-            "confidence_note": (
-                "Azure DI image mode 不暴露 per-cell confidence；"
-                "tables[].cells[].confidence 為 null。"
-                "word-level confidence 仍可用。"
-            ),
-            "header_flags": (
-                "Azure DI 不輸出 column_header / row_header 布林旗標；"
-                "由 Structure-aware Layer Input Adapter 以 heuristic（rowIndex==0）推斷"
-            ),
-            "bounding_box_format": (
-                "boundingRegions[].polygon（inches，八點多邊形格式）"
-            ),
-            "known_limitation": (
-                "image mode 無 per-cell confidence；"
-                "header 識別需 heuristic；"
-                "真實醫療文件 TEDS 約 0.699（JBI 2024）；"
-                "手寫欄位與印章覆蓋文字辨識準確率低"
-            ),
-            "fallback_reason": "azure_di_failed" if _di_api_error else None,
-        },
     }

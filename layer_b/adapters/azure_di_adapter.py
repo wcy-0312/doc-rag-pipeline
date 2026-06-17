@@ -66,13 +66,12 @@ def _apply_header_heuristics(cells: list[IRCell]) -> list[IRCell]:
 
 def _parse_qc(metadata: dict) -> QC:
     qc_data = metadata.get("qc", {})
-    conf_data = metadata.get("confidence", {})
     return QC(
         empty_cell_rate=qc_data.get("empty_cell_rate", 0.0),
         qc_level=qc_data.get("qc_level", "ok"),
-        warnings=qc_data.get("warnings", []),
-        word_avg=conf_data.get("word_avg"),
-        low_confidence_rate=conf_data.get("low_confidence_rate"),
+        warnings=metadata.get("extractor_metadata", {}).get("warnings", qc_data.get("warnings", [])),
+        word_avg=None,
+        low_confidence_rate=None,
         estimated_info_loss_rate=qc_data.get("estimated_info_loss_rate"),
     )
 

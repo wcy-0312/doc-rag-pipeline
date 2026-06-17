@@ -502,14 +502,9 @@ def convert_pdf_azure_cu(
         category=category,
         extractor="azure_cu",
         page_count=page_count,
-        title=title_para,
         markdown=raw.get("markdown", "") if not _cu_api_error else "",
         llm=llm,
     )
-
-    # ── 5. metadata 加入 confidence / qc ─────────────────────────────
-    metadata["confidence"] = confidence
-    metadata["qc"]         = qc
 
     # ── 6b. Checkbox 狀態偵測 ─────────────────────────────────────────────
     checkbox_states_by_page: dict[int, list[dict]] = {}
@@ -538,6 +533,17 @@ def convert_pdf_azure_cu(
     # ── 7. 組合 schema-v3.0 output（metadata + data 兩層）───────────────
     pages_no_words = confidence.get("pages_no_words", []) if isinstance(confidence, dict) else []
 
+    metadata["qc"] = {
+        "qc_level":                 qc["qc_level"],
+        "estimated_info_loss_rate": qc["estimated_info_loss_rate"],
+    }
+    metadata["extractor_metadata"] = {
+        "tool":             "azure_content_understanding",
+        "api_version":      "2024-12-01-preview",
+        "is_fully_scanned": len(pages_no_words) == page_count and page_count > 0,
+        "warnings":         qc.get("warnings", []),
+    }
+
     return {
         "schema_version": "v3.0",
         "metadata": metadata,
@@ -549,29 +555,4 @@ def convert_pdf_azure_cu(
             "checkbox_states":  checkbox_states_by_page,
         },
         "page_count": page_count,
-        "extractor_metadata": {
-            "tool":                "azure_content_understanding",
-            "analyzer_id":         "prebuilt-layout",
-            "api_version":         "2024-12-01-preview",
-            "parsing_mode":        None,
-            "version":             "1.1.0",
-            "confidence_source":   (
-                "pages[].words[].confidence（word-level，彙總為 per-page 及整體統計）"
-            ),
-            "per_cell_confidence": False,
-            "confidence_note": (
-                "Azure CU SDK（prebuilt-layout）實測不輸出 per-cell confidence；"
-                "tables[].cells[] 無 confidence 欄位。"
-                "word_avg 來自 pages[].words[].confidence 彙總。"
-            ),
-            "header_flags": (
-                "kind 欄位（'columnHeader' / 'rowHeader' / 'content'）"
-            ),
-            "bounding_box_format": (
-                "D(page, x0,y0, x1,y1, x2,y2, x3,y3)（inches，polygon 格式）"
-            ),
-            "known_limitation":    None,
-            "fallback_reason":     "cu_api_failed" if _cu_api_error else None,
-            "is_fully_scanned":    len(pages_no_words) == page_count and page_count > 0,
-        },
     }

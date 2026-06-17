@@ -20,22 +20,16 @@ def _parse_source_page(source_str: str) -> int | None:
 
 def _build_doc_metadata(raw: dict) -> dict:
     meta = raw.get("metadata", {})
-    doc = meta.get("document", {})
-    src = meta.get("source", {})
-    cls = meta.get("classification", {})
     return {
-        "doc_title":     doc.get("title"),
-        "doc_version":   doc.get("version"),
-        "doc_id":        doc.get("doc_id"),
-        "document_type": cls.get("document_type"),
-        "patient_id":    src.get("patient_id"),
-        "keywords":      doc.get("keywords", []),
+        "document_type": meta.get("document_type"),
+        "patient_id":    meta.get("patient_id"),
+        "keywords":      meta.get("keywords", []),
     }
 
 
 def _doc_prefix(raw: dict) -> str:
     """Generate a safe doc-level prefix from file_name stem."""
-    file_name = raw.get("metadata", {}).get("source", {}).get("file_name", "")
+    file_name = raw.get("metadata", {}).get("file_name", "")
     stem = _Path(file_name).stem if file_name else ""
     return re.sub(r'[^\w\-]', '_', stem) if stem else "doc"
 
@@ -434,22 +428,16 @@ def _normalize_source_tool(tool: str) -> str:
 def _doc_confidence(raw: dict) -> tuple[str, str, float]:
     """Return (confidence_level, quality_flag, retrieval_weight) for paragraph units.
 
-    Reads estimated_info_loss_rate from metadata.qc (primary) or
-    extractor_metadata (fallback for future schema changes).
+    Reads estimated_info_loss_rate from metadata.qc.
     """
     info_loss = None
     try:
         info_loss = raw["metadata"]["qc"]["estimated_info_loss_rate"]
     except (KeyError, TypeError):
         pass
-    if info_loss is None:
-        try:
-            info_loss = raw["extractor_metadata"]["estimated_info_loss_rate"]
-        except (KeyError, TypeError):
-            pass
     weight = _continuous_weight(info_loss)
     # 全掃描文件降權（OCR 準確率低於正常文件）
-    if raw.get("extractor_metadata", {}).get("is_fully_scanned"):
+    if raw.get("metadata", {}).get("extractor_metadata", {}).get("is_fully_scanned"):
         weight = weight * 0.8
     if weight >= 0.97:
         level = "high"

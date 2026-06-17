@@ -11,17 +11,27 @@ _ADAPTERS = {
 
 
 def get_source_tool(raw: dict) -> str:
-    """Extract source_tool from extractor_metadata.tool (Conversion Layer v3.0).
+    """Extract source_tool from metadata.extractor_metadata.tool (flat schema).
 
-    Falls back to 'azure_content_understanding' if field is absent.
+    Falls back to top-level extractor_metadata for test payloads,
+    then to 'azure_content_understanding' if field is absent.
     """
+    tool = raw.get("metadata", {}).get("extractor_metadata", {}).get("tool")
+    if tool:
+        return tool
+    # fallback for test payloads that use top-level extractor_metadata
     return raw.get("extractor_metadata", {}).get("tool", "azure_content_understanding")
 
 
 def adapt(raw: dict, source_tool: str) -> list:
     """Route to the correct adapter, handling Azure DI → Docling fallback."""
     if source_tool == "azure_document_intelligence":
-        warnings = raw.get("metadata", {}).get("qc", {}).get("warnings", [])
+        meta = raw.get("metadata", {})
+        # flat schema: warnings in extractor_metadata; legacy: in qc.warnings
+        warnings = (
+            meta.get("extractor_metadata", {}).get("warnings")
+            or meta.get("qc", {}).get("warnings", [])
+        )
         if _FALLBACK_WARNING in warnings:
             return docling_adapter.adapt(raw)
 

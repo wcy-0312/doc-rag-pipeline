@@ -238,36 +238,6 @@ def _compute_qc(raw: dict, page_count: int,
     }
 
 
-# ── 格式 Fallback 輔助函式 ────────────────────────────────────────────────────
-
-def _spreadsheet_to_markdown(path: Path) -> str:
-    """XLS / XLSX 轉 Markdown 表格（跳過圖表，只讀儲存格值）。"""
-    suffix = path.suffix.lower()
-    md_parts: list[str] = []
-
-    if suffix == ".xls":
-        import xlrd
-        wb = xlrd.open_workbook(str(path))
-        for sheet in wb.sheets():
-            md_parts.append(f"## {sheet.name}")
-            for row_idx in range(sheet.nrows):
-                row = [str(sheet.cell_value(row_idx, c) or "") for c in range(sheet.ncols)]
-                if any(v.strip() for v in row):
-                    md_parts.append("| " + " | ".join(row) + " |")
-    else:
-        import openpyxl
-        wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            md_parts.append(f"## {sheet_name}")
-            for row in ws.iter_rows(values_only=True):
-                vals = [str(v) if v is not None else "" for v in row]
-                if any(v.strip() for v in vals):
-                    md_parts.append("| " + " | ".join(vals) + " |")
-
-    return "\n\n".join(md_parts)
-
-
 # ── 主入口 ───────────────────────────────────────────────────────────────────
 
 def convert_pdf_docling(
@@ -322,66 +292,46 @@ def convert_pdf_docling(
                 describe_visuals=describe_visuals,
             )
 
-    # XLS：docling 不支援，直接用 xlrd fallback
-    if suffix == ".xls":
-        try:
-            markdown = _spreadsheet_to_markdown(pdf_path)
-            raw = {}
-        except Exception as exc:
-            markdown = ""
-            raw = {}
+    # 1. Docling 轉換
+    try:
+        conv     = DocumentConverter()
+        docling_result = conv.convert(pdf_path)
+        doc      = docling_result.document
+        raw      = doc.export_to_dict()
+        markdown = doc.export_to_markdown()
 
-    else:
-        # 1. Docling 轉換
-        try:
-            conv     = DocumentConverter()
-            docling_result = conv.convert(pdf_path)
-            doc      = docling_result.document
-            raw      = doc.export_to_dict()
-            markdown = doc.export_to_markdown()
-
-        except Exception as exc:
-            # XLSX 嵌入圖表導致 crash：用 openpyxl 讀純儲存格值
-            if suffix == ".xlsx":
-                try:
-                    markdown = _spreadsheet_to_markdown(pdf_path)
-                    raw = {}
-                except Exception:
-                    markdown = ""
-                    raw = {}
-            else:
-                # 其他格式失敗：回傳錯誤結構
-                page_count = 0
-                if suffix == ".pdf":
-                    try:
-                        import fitz as _fitz
-                        _doc = _fitz.open(str(pdf_path))
-                        page_count = _doc.page_count
-                        _doc.close()
-                    except Exception:
-                        pass
-                metadata = build_metadata(
-                    pdf_path=pdf_path, category=category,
-                    extractor="docling", page_count=page_count,
-                    markdown="", llm=llm,
-                )
-                metadata["confidence"] = {
-                    "source":    "docling_structure",
-                    "available": False,
-                    "note":      "Docling conversion failed; no word-level confidence",
-                }
-                metadata["qc"] = {
-                    "estimated_info_loss_rate": 1.0,
-                    "qc_level":  "danger",
-                    "warnings":  [],
-                    "errors":    [f"DOCLING_CONVERSION_FAILED: {type(exc).__name__}: {exc}"],
-                }
-                return {
-                    "schema_version": "v3.0",
-                    "metadata":   metadata,
-                    "data":       {},
-                    "page_count": page_count,
-                }
+    except Exception as exc:
+        # 其他格式失敗：回傳錯誤結構
+        page_count = 0
+        if suffix == ".pdf":
+            try:
+                import fitz as _fitz
+                _doc = _fitz.open(str(pdf_path))
+                page_count = _doc.page_count
+                _doc.close()
+            except Exception:
+                pass
+        metadata = build_metadata(
+            pdf_path=pdf_path, category=category,
+            extractor="docling", page_count=page_count,
+            markdown="", llm=llm,
+        )
+        metadata["qc"] = {
+            "qc_level":                 "danger",
+            "estimated_info_loss_rate": 1.0,
+        }
+        metadata["extractor_metadata"] = {
+            "tool":             "docling",
+            "api_version":      None,
+            "is_fully_scanned": False,
+            "warnings":         [f"DOCLING_CONVERSION_FAILED: {type(exc).__name__}: {exc}"],
+        }
+        return {
+            "schema_version": "v3.0",
+            "metadata":   metadata,
+            "data":       {},
+            "page_count": page_count,
+        }
 
     # 2. 匯出完整 Docling 原始結構
 
@@ -392,10 +342,10 @@ def convert_pdf_docling(
     # PDF：fitz 精確裁切；DOCX：用 Docling 內嵌的 base64 data URI 直接存檔
     pictures_raw = raw.get("pictures", [])
     is_pdf = pdf_path.suffix.lower() == ".pdf"
-    is_docx = suffix == ".docx"
+    is_office = suffix in {".docx", ".pptx"}
     if is_pdf and output_dir and pictures_raw:
         pictures = _materialize_pictures(pdf_path, pictures_raw, output_dir, page_sizes)
-    elif is_docx and output_dir and pictures_raw:
+    elif is_office and output_dir and pictures_raw:
         pictures = _materialize_pictures_from_uri(pictures_raw, output_dir, pdf_path.stem)
     else:
         pictures = [dict(p, path=None, sha256=None, has_image=False) for p in pictures_raw]
@@ -429,7 +379,7 @@ def convert_pdf_docling(
                             continue
                         pixmap    = doc[idx].get_pixmap(dpi=150)
                         png_bytes = pixmap.tobytes("png")
-                        sha256    = _hashlib.sha256(png_bytes).hexdigest()
+                        sha256    = hashlib.sha256(png_bytes).hexdigest()
                         fpath     = img_dir / f"{pdf_path.stem}_p{pn}_full.png"
                         if not fpath.exists():
                             fpath.write_bytes(png_bytes)
@@ -443,24 +393,61 @@ def convert_pdf_docling(
         except Exception:
             pass  # 整頁圖片失敗不中斷主流程
 
+    elif is_office and output_dir:
+        try:
+            import subprocess, tempfile
+            import fitz as _fitz
+            with tempfile.TemporaryDirectory() as _tmpdir:
+                _lo_result = subprocess.run(
+                    ["libreoffice", "--headless", "--convert-to", "pdf",
+                     "--outdir", _tmpdir, str(pdf_path)],
+                    capture_output=True, timeout=120,
+                )
+                if _lo_result.returncode == 0:
+                    _pdf_path = Path(_tmpdir) / (pdf_path.stem + ".pdf")
+                    if _pdf_path.exists():
+                        visual_pages: set[int] = set()
+                        # 有圖片的頁（用 pictures_raw：只要 Docling 偵測到圖片，不管 URI 是否解碼成功）
+                        for pic in pictures_raw:
+                            for prov in pic.get("prov", []):
+                                pn = prov.get("page_no")
+                                if pn:
+                                    visual_pages.add(pn)
+
+                        if visual_pages:
+                            img_dir = output_dir / "figures"
+                            img_dir.mkdir(parents=True, exist_ok=True)
+                            _doc = _fitz.open(str(_pdf_path))
+                            try:
+                                for pn in sorted(visual_pages):
+                                    idx = pn - 1
+                                    if idx >= len(_doc):
+                                        continue
+                                    pixmap    = _doc[idx].get_pixmap(dpi=150)
+                                    png_bytes = pixmap.tobytes("png")
+                                    sha256    = hashlib.sha256(png_bytes).hexdigest()
+                                    fpath     = img_dir / f"{pdf_path.stem}_p{pn}_full.png"
+                                    if not fpath.exists():
+                                        fpath.write_bytes(png_bytes)
+                                    page_images[pn] = {
+                                        "path":      str(fpath.relative_to(output_dir)),
+                                        "sha256":    sha256,
+                                        "has_image": True,
+                                    }
+                            finally:
+                                _doc.close()
+        except Exception:
+            pass  # page_images 失敗不中斷主流程
+
     # 4. metadata
-    title_text = next(
-        (t.get("text", "") for t in raw.get("texts", []) if t.get("label") == "title"),
-        None,
-    )
     metadata = build_metadata(
         pdf_path=pdf_path, category=category,
-        extractor="docling", page_count=page_count, title=title_text,
+        extractor="docling", page_count=page_count,
         markdown=markdown,
         llm=llm,
     )
 
     # 5. 組合 schema-v3.0 output（metadata + data 兩層）
-    confidence = {
-        "source":    "docling_structure",
-        "available": False,
-        "note":      "Layout/text/table extracted by Docling; no word-level confidence exposed",
-    }
     qc = _compute_qc(raw, page_count, pictures, output_dir is not None)
 
     # 掃描型 PDF 偵測：所有頁面都沒有萃取出文字，且是 PDF
@@ -503,63 +490,16 @@ def convert_pdf_docling(
         except Exception:
             pass
 
-    # Gap 3：JPG/PNG OCR 近乎空白 → 儲存原始圖作為 page_images fallback
-    if suffix in {".jpg", ".jpeg", ".png"} and output_dir:
-        meaningful = markdown.replace("<!-- image -->", "").replace("\n", "").strip()
-        if len(meaningful) < 50:
-            try:
-                img_dir = output_dir / "figures"
-                img_dir.mkdir(parents=True, exist_ok=True)
-                dest = img_dir / f"{pdf_path.stem}_p1_full{suffix}"
-                import shutil as _shutil
-                _shutil.copy2(str(pdf_path), str(dest))
-                sha256 = _hashlib.sha256(pdf_path.read_bytes()).hexdigest()
-                page_images[1] = {
-                    "path":      str(dest.relative_to(output_dir)),
-                    "sha256":    sha256,
-                    "has_image": True,
-                }
-                qc["warnings"].append("IMAGE_OCR_INSUFFICIENT_STORED_AS_PAGE_IMAGE")
-            except Exception:
-                pass
-
-    # Gap 4：PPTX 空白輸出 → 用 python-pptx 萃取投影片圖片
-    if suffix == ".pptx" and output_dir:
-        meaningful = markdown.replace("<!-- image -->", "").replace("\n", "").strip()
-        if len(meaningful) < 100:
-            try:
-                from pptx import Presentation as _Presentation
-                prs = _Presentation(str(pdf_path))
-                img_dir = output_dir / "figures"
-                img_dir.mkdir(parents=True, exist_ok=True)
-                for slide_idx, slide in enumerate(prs.slides, 1):
-                    for shape in slide.shapes:
-                        if shape.shape_type == 13:  # PICTURE
-                            img_data = shape.image.blob
-                            ext      = shape.image.ext or "png"
-                            sha256   = _hashlib.sha256(img_data).hexdigest()
-                            fname    = f"{pdf_path.stem}_p{slide_idx}_full.{ext}"
-                            fpath    = img_dir / fname
-                            fpath.write_bytes(img_data)
-                            page_images[slide_idx] = {
-                                "path":      str(fpath.relative_to(output_dir)),
-                                "sha256":    sha256,
-                                "has_image": True,
-                            }
-                            break  # 每張投影片取第一張圖
-                qc["warnings"].append("PPTX_TEXT_EMPTY_SLIDES_STORED_AS_PAGE_IMAGES")
-            except Exception:
-                pass
-
-    metadata["confidence"] = confidence
-    metadata["qc"]         = qc
-
-    # 取得 Docling 套件版本（安裝後可讀取；讀取失敗則記為 ">=2.0"）
-    try:
-        from importlib.metadata import version as _pkg_version
-        _docling_version = _pkg_version("docling")
-    except Exception:
-        _docling_version = ">=2.0"
+    metadata["qc"] = {
+        "qc_level":                 qc["qc_level"],
+        "estimated_info_loss_rate": qc["estimated_info_loss_rate"],
+    }
+    metadata["extractor_metadata"] = {
+        "tool":             "docling",
+        "api_version":      None,
+        "is_fully_scanned": bool(qc.get("is_fully_scanned", False)),
+        "warnings":         qc.get("warnings", []),
+    }
 
     return {
         "schema_version": "v3.0",
@@ -577,29 +517,4 @@ def convert_pdf_docling(
             "furniture":       raw.get("furniture",       {}),
         },
         "page_count": page_count,
-        "extractor_metadata": {
-            "tool":                "docling",
-            "analyzer_id":         None,
-            "api_version":         None,
-            "parsing_mode":        "xml_native",
-            "version":             _docling_version,
-            "confidence_source":   None,
-            "per_cell_confidence": False,
-            "confidence_note": (
-                "Docling 從 XML 直接解析，不經 OCR，因此無信心分數；"
-                "結構正確性由 empty_cell_rate 與 garbled_char_rate 間接評估"
-            ),
-            "header_flags": (
-                "column_header / row_header 布林欄位由 Docling 從 XML 解析，非 heuristic"
-            ),
-            "bounding_box_format": (
-                "Docling BOTTOMLEFT bbox（l/t/r/b，pt 單位）"
-            ),
-            "known_limitation": (
-                "複雜三層以上 merged header 的 row_span 計算偶有已知 Docling GitHub issues；"
-                "部分 item（embedded object / floating element）的 prov[] 陣列可能為空或缺少 page_no 欄位，"
-                "下游應以繼承前一 item 頁碼或標記 page_unknown 作為 fallback"
-            ),
-            "fallback_reason":     None,
-        },
     }

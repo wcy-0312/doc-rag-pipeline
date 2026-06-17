@@ -1,35 +1,20 @@
 """
 metadata_builder.py — 標準 metadata 建構工具
 
-所有 extractor 使用相同的 metadata 結構：
-  source         → 檔案事實（與 extractor 無關）
-  classification → 是否文件、類型、語言
-  document       → 文件管理資訊（標題、版本、修訂日期等）
-  processing     → 轉換過程資訊
-
-doc_id 解析規則（護理 SOP 文件編號格式）：
-  A31000-Q05-W-C06  → 從檔名解析
-  N12345-A01        → 護理 SOP 規格編號
+所有 extractor 使用相同的 flat metadata 結構：
+  file_name       → 檔案名稱
+  file_type       → 副檔名（小寫，不含點）
+  page_count      → 頁數
+  patient_id      → 父目錄為純數字時填入，否則 null
+  document_type   → 識別不到填 None
+  keywords        → LLM 萃取關鍵字
+  processed_at    → UTC ISO 8601
 """
 
 from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-
-
-# ── doc_id 解析 ───────────────────────────────────────────────────────────
-
-_DOC_ID_RE = re.compile(
-    r'[A-Z]\d{4,6}-[A-Z]\d{2}-P-\d{3}(?:-\d+)?'   # A31000-Q09-P-001(-1) 管理辦法（含子附件）
-    r'|[A-Z]\d{4,6}-[A-Z]\d{2}-[A-Z]-[A-Z]\d{2}'   # A31000-Q05-W-A30 / Q06-F-A03
-    r'|[A-Z]\d{4,6}-[A-Z]\d{2}'                      # N12345-A01 短格式
-    r'|[TE]-[A-Za-z]+-\d{3}'                          # T-Adult-055 / E-Adult-081 衛教單張
-)
-
-def _extract_doc_id(file_stem: str) -> str | None:
-    m = _DOC_ID_RE.search(file_stem)
-    return m.group(0) if m else None
 
 
 # ── document_type 自動偵測 ────────────────────────────────────────────────
@@ -59,107 +44,62 @@ def _infer_document_type(file_stem: str) -> str | None:
     return None
 
 
-# ── version / revision_date 解析（從標題或段落）──────────────────────────
-
-_VERSION_RE = re.compile(r'[Vv](?:ersion\s*)?(\d+(?:\.\d+)*)', re.IGNORECASE)
-_DATE_RE    = re.compile(
-    r'\d{4}[/-]\d{1,2}[/-]\d{1,2}'     # 2024-03-19
-    r'|\d{2,3}[.]\d{1,2}[.]\d{1,2}'    # 113.3.5（民國）
-    r'|\d{2,3}年\d{1,2}月\d{1,2}日'    # 113年3月19日
-)
-
-def _extract_version(text: str) -> str | None:
-    m = _VERSION_RE.search(text)
-    return m.group(1) if m else None
-
-def _extract_date(text: str) -> str | None:
-    m = _DATE_RE.search(text)
-    return m.group(0) if m else None
-
-
 # ── 主函式 ────────────────────────────────────────────────────────────────
+
+def _extract_pdf_keywords(pdf_path: Path) -> list[str] | None:
+    """從 PDF 檔案 metadata 讀取 keywords（通常空白，作為 fallback）。"""
+    try:
+        import fitz
+        doc = fitz.open(str(pdf_path))
+        kw_str = (doc.metadata.get("keywords") or "").strip()
+        doc.close()
+        if not kw_str:
+            return None
+        return [k.strip() for k in re.split(r'[,;、，；]', kw_str) if k.strip()]
+    except Exception:
+        return None
+
 
 def build_metadata(
     pdf_path: Path,
     category: str,
-    extractor: str,
     page_count: int,
+    markdown: str | None = None,
+    llm=None,
+    keywords: list[str] | None = None,
+    # 以下參數保留相容性但不使用
+    extractor: str | None = None,
     title: str | None = None,
     version: str | None = None,
     revision_date: str | None = None,
     effective_date: str | None = None,
     department: str | None = None,
-    markdown: str = "",
-    llm=None,
 ) -> dict:
-    """標準 4 層 metadata。
+    """Flat metadata 結構。
 
     Args:
-        pdf_path       : PDF 路徑（取 file_name、file_size、doc_id）
-        category       : 文件類別（如「癌症診療指引」）
-        extractor      : 使用的 extractor（"azure_cu" / "docling" / "llm"）
-        page_count     : 頁數
-        title          : 文件標題（None 時從檔名取）
-        version        : 版本號（None 時從標題解析）
-        revision_date  : 修訂日期（None 時嘗試從標題解析）
-        effective_date : 生效日期（公布日期，None 時留空）
-        department     : 部門（None 時留空）
-        markdown       : 文件 markdown 全文（供 LLM 關鍵字萃取）
-        llm            : LLM 實例（None 時跳過關鍵字萃取，回傳 []）
+        pdf_path   : 檔案路徑（取 file_name、patient_id、document_type）
+        category   : 文件類別（如「癌症診療指引」）
+        page_count : 頁數
+        markdown   : 文件 markdown 內容（供關鍵字萃取使用）
+        llm        : LLM 物件（供關鍵字萃取使用）
+        keywords   : 手動指定關鍵字（優先使用）
     """
     stem = pdf_path.stem
-
-    # source：純檔案事實
     folder_name = pdf_path.parent.name
-    source = {
-        "file_name":       pdf_path.name,
-        "file_type":       pdf_path.suffix.lstrip(".").lower(),
-        "file_size_bytes": pdf_path.stat().st_size,
-        "page_count":      page_count,
-        "patient_id":      folder_name if folder_name.isdigit() else None,
-    }
 
-    # classification：category 明確傳入優先，否則從檔名自動偵測
-    resolved_type   = category or _infer_document_type(stem) or "unknown"
-    detection_method = "explicit" if category else ("rule_based" if resolved_type != "unknown" else "unknown")
+    # document_type：category 明確傳入優先，否則從檔名自動偵測，識別不到回傳 None
+    resolved_type = category or _infer_document_type(stem) or None
 
-    classification = {
-        "is_document":   True,
-        "document_type": resolved_type,
-        "language":      "zh-TW",
-        "method":        detection_method,
-    }
-
-    # document：從標題或檔名萃取
-    resolved_title = title or stem
-    resolved_ver   = version or _extract_version(resolved_title) or _extract_version(stem)
-    resolved_date  = revision_date or _extract_date(resolved_title)
-    doc_id         = _extract_doc_id(stem)
-
-    from layer_a.keyword_extractor import extract_keywords
-    resolved_keywords = extract_keywords(markdown, llm) if (markdown and llm is not None) else []
-
-    document = {
-        "title":          resolved_title,
-        "doc_id":         doc_id,
-        "version":        resolved_ver,
-        "version_status": "active",   # 預設現行有效；多版本共存時由外部邏輯更新
-        "revision_date":  resolved_date,
-        "effective_date": effective_date,
-        "department":     department,
-        "keywords":       resolved_keywords,
-    }
-
-    # processing
-    processing = {
-        "extractor":      extractor,
-        "processed_at":   datetime.now(tz=timezone.utc).isoformat(),
-        "schema_version": "v3.0",
-    }
+    # keywords
+    resolved_keywords = keywords if keywords is not None else (_extract_pdf_keywords(pdf_path) or [])
 
     return {
-        "source":         source,
-        "classification": classification,
-        "document":       document,
-        "processing":     processing,
+        "file_name":     pdf_path.name,
+        "file_type":     pdf_path.suffix.lstrip(".").lower(),
+        "page_count":    page_count,
+        "patient_id":    folder_name if folder_name.isdigit() else None,
+        "document_type": resolved_type,
+        "keywords":      resolved_keywords,
+        "processed_at":  datetime.now(tz=timezone.utc).isoformat(),
     }
