@@ -79,20 +79,6 @@ def _extract_date(text: str) -> str | None:
 
 # ── 主函式 ────────────────────────────────────────────────────────────────
 
-def _extract_pdf_keywords(pdf_path: Path) -> list[str] | None:
-    """從 PDF 檔案 metadata 讀取 keywords（通常空白，作為 fallback）。"""
-    try:
-        import fitz
-        doc = fitz.open(str(pdf_path))
-        kw_str = (doc.metadata.get("keywords") or "").strip()
-        doc.close()
-        if not kw_str:
-            return None
-        return [k.strip() for k in re.split(r'[,;、，；]', kw_str) if k.strip()]
-    except Exception:
-        return None
-
-
 def build_metadata(
     pdf_path: Path,
     category: str,
@@ -103,7 +89,8 @@ def build_metadata(
     revision_date: str | None = None,
     effective_date: str | None = None,
     department: str | None = None,
-    keywords: list[str] | None = None,
+    markdown: str = "",
+    llm=None,
 ) -> dict:
     """標準 4 層 metadata。
 
@@ -117,6 +104,8 @@ def build_metadata(
         revision_date  : 修訂日期（None 時嘗試從標題解析）
         effective_date : 生效日期（公布日期，None 時留空）
         department     : 部門（None 時留空）
+        markdown       : 文件 markdown 全文（供 LLM 關鍵字萃取）
+        llm            : LLM 實例（None 時跳過關鍵字萃取，回傳 []）
     """
     stem = pdf_path.stem
 
@@ -147,7 +136,8 @@ def build_metadata(
     resolved_date  = revision_date or _extract_date(resolved_title)
     doc_id         = _extract_doc_id(stem)
 
-    resolved_keywords = keywords if keywords is not None else (_extract_pdf_keywords(pdf_path) or [])
+    from layer_a.keyword_extractor import extract_keywords
+    resolved_keywords = extract_keywords(markdown, llm) if (markdown and llm is not None) else []
 
     document = {
         "title":          resolved_title,

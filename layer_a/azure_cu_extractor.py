@@ -459,7 +459,7 @@ def convert_pdf_azure_cu(
     pdf_path: Path,
     category: str = "",
     output_dir: Path | None = None,
-    keywords: list[str] | None = None,
+    llm=None,
 ) -> dict:
     """CU API path：PDF → structured JSON（schema-v3.0）。
 
@@ -469,6 +469,7 @@ def convert_pdf_azure_cu(
         pdf_path   : PDF 檔案路徑
         category   : 文件類別
         output_dir : 圖片輸出根目錄（None = 不存圖，figures[].path 為 null）
+        llm        : LLM 實例（有值時對 markdown 進行關鍵字萃取）
 
     Returns:
         schema-v3.0 dict
@@ -604,7 +605,8 @@ def convert_pdf_azure_cu(
         extractor="azure_cu",
         page_count=page_count,
         title=title_para,
-        keywords=keywords,
+        markdown=raw.get("markdown", "") if not _cu_api_error else "",
+        llm=llm,
     )
 
     # ── 6. 整頁圖片（流程圖、掃描頁）──────────────────────────────────────

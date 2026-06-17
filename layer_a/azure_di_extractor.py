@@ -413,7 +413,7 @@ def convert_image_azure_di(
     img_path: Path,
     category: str = "",
     output_dir: Path | None = None,
-    keywords: list[str] | None = None,
+    llm=None,
 ) -> dict:
     """Azure DI v4.0 照片 path：圖片 → structured JSON（schema-v3.0）。
 
@@ -425,7 +425,7 @@ def convert_image_azure_di(
         img_path   : 圖片路徑（.jpg/.jpeg/.png/.tiff/.heif）
         category   : 文件類別（用於 metadata.classification.document_type）
         output_dir : 輸出目錄（有值時存原始圖片）
-        keywords   : 手動指定關鍵字（None 時由上游 keyword_extractor 處理）
+        llm        : LLM 實例（有值時對 markdown 進行關鍵字萃取）
 
     Returns:
         schema-v3.0 dict
@@ -554,7 +554,8 @@ def convert_image_azure_di(
         extractor="azure_di",
         page_count=page_count,
         title=title_para,
-        keywords=keywords,
+        markdown=markdown if not _di_api_error else "",
+        llm=llm,
     )
 
     metadata["confidence"] = confidence

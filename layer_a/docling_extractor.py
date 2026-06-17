@@ -276,7 +276,6 @@ def convert_pdf_docling(
     category: str = "",
     output_dir: Path | None = None,
     describe_visuals: bool = False,
-    keywords: list[str] | None = None,
 ) -> dict:
     """Docling path：PDF → Docling 原始結構（schema-v3.0）。
 
@@ -288,7 +287,7 @@ def convert_pdf_docling(
 
     Args:
         pdf_path       : PDF 路徑
-        llm            : 保留供 extractor 介面一致性，不使用
+        llm            : LLM 實例（有值時對 markdown 進行關鍵字萃取）
         category       : 文件類別
         output_dir     : 圖片輸出目錄（有值時用 bbox 精確裁切）
         describe_visuals: 保留供 extractor 介面一致性，不使用
@@ -321,7 +320,6 @@ def convert_pdf_docling(
                 category=category,
                 output_dir=output_dir,
                 describe_visuals=describe_visuals,
-                keywords=keywords,
             )
 
     # XLS：docling 不支援，直接用 xlrd fallback
@@ -365,7 +363,7 @@ def convert_pdf_docling(
                 metadata = build_metadata(
                     pdf_path=pdf_path, category=category,
                     extractor="docling", page_count=page_count,
-                    keywords=keywords,
+                    markdown="", llm=llm,
                 )
                 metadata["confidence"] = {
                     "source":    "docling_structure",
@@ -453,7 +451,8 @@ def convert_pdf_docling(
     metadata = build_metadata(
         pdf_path=pdf_path, category=category,
         extractor="docling", page_count=page_count, title=title_text,
-        keywords=keywords,
+        markdown=markdown,
+        llm=llm,
     )
 
     # 5. 組合 schema-v3.0 output（metadata + data 兩層）
