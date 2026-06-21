@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+from dataclasses import replace
 from pathlib import Path as _Path
 from layer_b.adapters import adapt, get_source_tool
 from layer_b.normalizers.merger import merge_cross_page, expand_spans
@@ -467,7 +468,7 @@ def _doc_confidence(raw: dict) -> tuple[str, str, float]:
     return level, flag, weight
 
 
-def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metadata: dict | None = None) -> list[RetrievalUnit]:
+def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metadata: dict | None = None, confidence: tuple | None = None) -> list[RetrievalUnit]:
     """Extract paragraph-path RetrievalUnits from raw document data.
 
     Runs in parallel with _table_path(); called by process_document().
@@ -510,7 +511,7 @@ def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metad
 
     total_len = sum(len(c["content"]) for c in candidates)
 
-    confidence_level, quality_flag, retrieval_weight = _doc_confidence(raw)
+    confidence_level, quality_flag, retrieval_weight = confidence if confidence is not None else _doc_confidence(raw)
 
     if total_len < SHORT_DOC_THRESHOLD:
         any_hw = any(
@@ -667,7 +668,7 @@ def _build_page_context_map(data: dict, source_tool: str) -> dict:
     }
 
 
-def _figure_path(raw: dict, source_tool: str, doc_prefix: str, doc_metadata: dict | None = None) -> list[RetrievalUnit]:
+def _figure_path(raw: dict, source_tool: str, doc_prefix: str, doc_metadata: dict | None = None, confidence: tuple | None = None, page_context_map: dict | None = None) -> list[RetrievalUnit]:
     """Generate RetrievalUnit for each meaningful figure.
 
     Meaningful = area >= 0.5 page units (filters tiny decorative icons).
@@ -676,9 +677,9 @@ def _figure_path(raw: dict, source_tool: str, doc_prefix: str, doc_metadata: dic
     data = raw.get("data", {})
     figures = data.get("figures", [])
     paragraphs = data.get("paragraphs", [])
-    confidence_level, quality_flag, retrieval_weight = _doc_confidence(raw)
+    confidence_level, quality_flag, retrieval_weight = confidence if confidence is not None else _doc_confidence(raw)
     norm_tool = _normalize_source_tool(source_tool)
-    page_context_map = _build_page_context_map(data, norm_tool)
+    page_context_map = page_context_map if page_context_map is not None else _build_page_context_map(data, norm_tool)
 
     units = []
     seq = 0
@@ -744,6 +745,8 @@ def _high_graphics_path(
     doc_prefix: str,
     norm_tool: str,
     doc_metadata: dict | None = None,
+    confidence: tuple | None = None,
+    page_context_map: dict | None = None,
     covered_pages: set[int] | None = None,
 ) -> list[RetrievalUnit]:
     """為有 page_image 但無任何其他 RetrievalUnit 的頁面生成文件級 RetrievalUnit。
@@ -760,9 +763,9 @@ def _high_graphics_path(
     # 已被前面三個 path 處理過的頁面，直接跳過
     pages_with_figures: set[int] = covered_pages or set()
 
-    confidence_level, quality_flag, retrieval_weight = _doc_confidence(raw)
+    confidence_level, quality_flag, retrieval_weight = confidence if confidence is not None else _doc_confidence(raw)
 
-    page_context_map = _build_page_context_map(data, norm_tool)
+    page_context_map = page_context_map if page_context_map is not None else _build_page_context_map(data, norm_tool)
 
     units: list[RetrievalUnit] = []
     for page_key, img_info in page_images.items():
@@ -856,16 +859,17 @@ def process_document(raw: dict) -> list[RetrievalUnit]:
         return _document_path(raw)
     doc_prefix = _doc_prefix(raw)
     doc_metadata = _build_doc_metadata(raw)
+    norm_tool = _normalize_source_tool(source_tool)
+    confidence = _doc_confidence(raw)
+    page_context_map = _build_page_context_map(raw.get("data", {}), norm_tool)
     units = []
     units.extend(_table_path(raw, source_tool, doc_prefix, doc_metadata))
-    units.extend(_paragraph_path(raw, source_tool, doc_prefix, doc_metadata))
-    norm_tool = _normalize_source_tool(source_tool)
-    units.extend(_figure_path(raw, source_tool, doc_prefix, doc_metadata))
+    units.extend(_paragraph_path(raw, source_tool, doc_prefix, doc_metadata, confidence))
+    units.extend(_figure_path(raw, source_tool, doc_prefix, doc_metadata, confidence, page_context_map))
     _covered = {p for u in units for p in (u.source_pages or [])}
-    units.extend(_high_graphics_path(raw, doc_prefix, norm_tool, doc_metadata, covered_pages=_covered))
+    units.extend(_high_graphics_path(raw, doc_prefix, norm_tool, doc_metadata, confidence, page_context_map, covered_pages=_covered))
     vision_desc = raw.get("vision_description", "")
     if vision_desc:
-        from dataclasses import replace
         units = [
             replace(u, embedding_text=vision_desc + "\n" + u.embedding_text)
             if u.embedding_text
