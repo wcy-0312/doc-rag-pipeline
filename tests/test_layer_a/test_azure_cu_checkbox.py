@@ -82,13 +82,13 @@ def test_detect_checkbox_states_visual_unchecked():
     assert len(checked) == 0
 
 
-def test_save_page_images_embedded_image_trigger(tmp_path):
-    """_save_page_images triggers full-page save for pages with large embedded images."""
+def test_page_image_refs_embedded_image_trigger(tmp_path):
+    """_page_image_refs detects pages with large embedded images and returns pdf_path refs."""
     pytest.importorskip("PIL")
     import fitz
     from PIL import Image
     import io
-    from layer_a.azure_cu_extractor import _save_page_images
+    from layer_a.azure_cu_extractor import _page_image_refs
 
     # Create a PDF with a large embedded image (> 2.0 sqin)
     doc = fitz.open()
@@ -108,11 +108,11 @@ def test_save_page_images_embedded_image_trigger(tmp_path):
     # confidence with no pages_no_words (so trigger 2 doesn't fire)
     confidence = {"pages_no_words": [], "page_stats": []}
     figures = []  # no figures (so trigger 1 doesn't fire)
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
 
-    result = _save_page_images(pdf_path, figures, confidence, output_dir, category="", page_count=1)
+    result = _page_image_refs(pdf_path, figures, confidence, category="", page_count=1)
 
-    # Page 1 should have been saved due to embedded image trigger
+    # Page 1 should be detected due to embedded image trigger
     assert 1 in result
     assert result[1]["has_image"] is True
+    assert result[1]["pdf_path"] == str(pdf_path)
+    assert result[1]["page_no"] == 1

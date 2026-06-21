@@ -30,7 +30,7 @@ API endpoint：settings.azure_di_endpoint
 """
 
 from __future__ import annotations
-import hashlib, os, shutil, sys
+import os, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -153,102 +153,6 @@ def _compute_confidence(raw: dict) -> dict:
 
 
 
-# ── 儲存原始圖片（page_images fallback）────────────────────────────────────
-
-def _save_original_image(
-    img_path: Path,
-    output_dir: Path,
-) -> dict:
-    """將原始圖片複製至 output_dir/figures/，回傳 page_images[1] 結構。
-
-    Azure DI 照片 path 每張圖片都存一份完整頁面圖，
-    確保 OCR 不足時 Structure-aware Layer 仍有視覺參考。
-    """
-    img_dir = output_dir / "figures"
-    img_dir.mkdir(parents=True, exist_ok=True)
-
-    suffix = img_path.suffix.lower()
-    dest   = img_dir / f"{img_path.stem}_p1_full{suffix}"
-    shutil.copy2(str(img_path), str(dest))
-
-    sha256 = hashlib.sha256(img_path.read_bytes()).hexdigest()
-    return {
-        "path":      str(dest.relative_to(output_dir)),
-        "sha256":    sha256,
-        "has_image": True,
-    }
-
-
-def _crop_figures(
-    figures: list[dict],
-    pages: list[dict],
-    img_path: Path,
-    output_dir: Path,
-) -> list[dict]:
-    """從原始圖片裁切 Azure DI 偵測到的 figure 區域，儲存為獨立 PNG。
-
-    Azure DI figures[].boundingRegions[].polygon 座標單位為英吋，
-    換算方式：pixel = inch * (image_px / page_inch)。
-    裁切失敗時靜默繼續，原始 figure dict 不受影響。
-    """
-    if not figures or not pages:
-        return figures
-
-    try:
-        from PIL import Image as _PILImage
-    except ImportError:
-        return figures
-
-    page_info = pages[0] if pages else {}
-    page_w_in = page_info.get("width") or 0.0
-    page_h_in = page_info.get("height") or 0.0
-
-    if not page_w_in or not page_h_in:
-        return figures
-
-    try:
-        img = _PILImage.open(img_path)
-        img_w_px, img_h_px = img.size
-    except Exception:
-        return figures
-
-    px_per_in_x = img_w_px / page_w_in
-    px_per_in_y = img_h_px / page_h_in
-
-    img_dir = output_dir / "figures"
-    img_dir.mkdir(parents=True, exist_ok=True)
-
-    result = []
-    for i, fig in enumerate(figures):
-        fig_out = dict(fig)
-        bounding = fig.get("boundingRegions", [])
-        if not bounding:
-            result.append(fig_out)
-            continue
-
-        polygon = bounding[0].get("polygon", [])
-        if len(polygon) < 8:
-            result.append(fig_out)
-            continue
-
-        try:
-            xs = [polygon[j] * px_per_in_x for j in range(0, len(polygon), 2)]
-            ys = [polygon[j] * px_per_in_y for j in range(1, len(polygon), 2)]
-            x0, y0 = max(0, int(min(xs))), max(0, int(min(ys)))
-            x1, y1 = min(img_w_px, int(max(xs))), min(img_h_px, int(max(ys)))
-
-            if x1 > x0 and y1 > y0:
-                cropped = img.crop((x0, y0, x1, y1))
-                out_path = img_dir / f"{img_path.stem}_fig{i:03d}.png"
-                cropped.save(str(out_path))
-                fig_out["path"] = str(out_path.relative_to(output_dir))
-                fig_out["has_image"] = True
-        except Exception:
-            pass
-
-        result.append(fig_out)
-
-    return result
 
 
 # ── QC 量化 ──────────────────────────────────────────────────────────────────
@@ -465,21 +369,16 @@ def convert_image_azure_di(
         "note":      _di_api_error or "Azure DI API unavailable",
     }
 
-    # ── 3b. Figure 裁切（需 Pillow + output_dir）────────────────────────
+    # ── 3b. figures：polygon 座標已在 API 回應中，不裁切存圖 ─────────────
     raw_figures = raw.get("figures", [])
-    if output_dir and raw_figures and not _di_api_error:
-        raw_figures = _crop_figures(raw_figures, raw.get("pages", []), img_path, output_dir)
 
     # ── 4. Markdown 生成 ─────────────────────────────────────────────────
     markdown = _build_markdown(raw)
 
-    # ── 5. page_images：永遠儲存原始圖片 ────────────────────────────────
-    page_images: dict[int, dict] = {}
-    if output_dir:
-        try:
-            page_images[1] = _save_original_image(img_path, output_dir)
-        except Exception:
-            pass  # 存圖失敗不中斷主流程
+    # ── 5. page_images：記錄原始圖片路徑參考（不複製）────────────────────
+    page_images: dict[int, dict] = {
+        1: {"image_path": str(img_path), "page_no": 1, "has_image": True}
+    }
 
     # ── 6. QC 量化 ───────────────────────────────────────────────────────
     total_text_chars = sum(

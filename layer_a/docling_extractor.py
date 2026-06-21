@@ -22,7 +22,7 @@ Docling export_to_dict() 原始輸出直接保留：
 """
 
 from __future__ import annotations
-import sys, hashlib
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -33,23 +33,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 def _materialize_pictures(
     pdf_path: Path,
     pictures: list[dict],
-    output_dir: Path,
     page_sizes: dict,
 ) -> list[dict]:
-    """用 Docling bbox 裁切並存圖（比 CU API 更精確：PictureItem bbox = 實際圖範圍）。"""
-    import fitz
+    """為每張 Docling figure 記錄 PDF 參考座標（不渲染存圖）。
 
-    img_dir = output_dir / "figures"
-    img_dir.mkdir(parents=True, exist_ok=True)
+    回傳結構：pic dict + {pdf_path, page_no, bbox, has_image}。
+    Layer E 按需使用 pdf_path + bbox 裁切。
+    """
+    import fitz
 
     doc = fitz.open(str(pdf_path))
     result = []
 
-    for seq, pic in enumerate(pictures, 1):
+    for pic in pictures:
         pic_out = dict(pic)
-        provs   = pic.get("prov", [])
+        provs = pic.get("prov", [])
         if not provs:
-            pic_out.update({"path": None, "sha256": None, "has_image": False})
+            pic_out.update({"has_image": False})
             result.append(pic_out)
             continue
 
@@ -57,7 +57,7 @@ def _materialize_pictures(
         page_no = prov.get("page_no", 1)
         bbox    = prov.get("bbox", {})
         if page_no - 1 >= len(doc) or not bbox:
-            pic_out.update({"path": None, "sha256": None, "has_image": False})
+            pic_out.update({"has_image": False})
             result.append(pic_out)
             continue
 
@@ -65,7 +65,6 @@ def _materialize_pictures(
         l, t, r, b = bbox["l"], bbox["t"], bbox["r"], bbox["b"]
 
         # Docling BOTTOMLEFT → fitz TOPLEFT 座標系轉換
-        # normalize 防止座標反轉（某些 PDF 工具輸出異常 bbox）
         try:
             if bbox.get("coord_origin", "BOTTOMLEFT") == "BOTTOMLEFT":
                 ph = page_sizes.get(str(page_no), {}).get("height", page.rect.height)
@@ -76,71 +75,24 @@ def _materialize_pictures(
                 y0, y1 = min(t, b), max(t, b)
             rect = fitz.Rect(x0, y0, x1, y1) & page.rect
         except Exception:
-            pic_out.update({"path": None, "sha256": None, "has_image": False})
+            pic_out.update({"has_image": False})
             result.append(pic_out)
             continue
 
         if rect.is_empty:
-            pic_out.update({"path": None, "sha256": None, "has_image": False})
+            pic_out.update({"has_image": False})
             result.append(pic_out)
             continue
 
-        pixmap    = page.get_pixmap(clip=rect, dpi=150)
-        png_bytes = pixmap.tobytes("png")
-        sha256    = hashlib.sha256(png_bytes).hexdigest()
-        fname     = f"{pdf_path.stem}_p{page_no}_pic{seq}.png"
-        fpath     = img_dir / fname
-        fpath.write_bytes(png_bytes)
-
         pic_out.update({
-            "path":      str(fpath.relative_to(output_dir)),
-            "sha256":    sha256,
+            "pdf_path": str(pdf_path),
+            "page_no":  page_no,
+            "bbox":     {"x0": rect.x0, "y0": rect.y0, "x1": rect.x1, "y1": rect.y1},
             "has_image": True,
         })
         result.append(pic_out)
 
     doc.close()
-    return result
-
-
-def _materialize_pictures_from_uri(
-    pictures: list[dict],
-    output_dir: Path,
-    stem: str,
-) -> list[dict]:
-    """DOCX path：從 Docling 內嵌的 base64 data URI 解碼存圖。
-
-    Docling 對 DOCX 的 pictures[].image.uri 格式為
-    'data:<mimetype>;base64,<data>'，直接解碼即可取得圖片位元組。
-    不需要 fitz（PDF-only）。
-    """
-    import base64 as _b64
-    img_dir = output_dir / "figures"
-    img_dir.mkdir(parents=True, exist_ok=True)
-    result = []
-    for seq, pic in enumerate(pictures, 1):
-        pic_out = dict(pic)
-        uri = (pic.get("image") or {}).get("uri", "")
-        if not uri.startswith("data:"):
-            pic_out.update({"path": None, "sha256": None, "has_image": False})
-            result.append(pic_out)
-            continue
-        try:
-            header, b64data = uri.split(",", 1)
-            mimetype = header.split(";")[0].replace("data:", "")
-            ext = mimetype.split("/")[-1] if "/" in mimetype else "png"
-            img_bytes = _b64.b64decode(b64data)
-            sha256 = hashlib.sha256(img_bytes).hexdigest()
-            fpath = img_dir / f"{stem}_pic{seq}.{ext}"
-            fpath.write_bytes(img_bytes)
-            pic_out.update({
-                "path":      str(fpath.relative_to(output_dir)),
-                "sha256":    sha256,
-                "has_image": True,
-            })
-        except Exception:
-            pic_out.update({"path": None, "sha256": None, "has_image": False})
-        result.append(pic_out)
     return result
 
 
@@ -339,105 +291,38 @@ def convert_pdf_docling(
     page_sizes = {k: v.get("size", {}) for k, v in raw.get("pages", {}).items()}
 
     # 3. 圖片裁切（使用 Docling bbox）
-    # PDF：fitz 精確裁切；DOCX：用 Docling 內嵌的 base64 data URI 直接存檔
+    # PDF：記錄 bbox 參考；DOCX：無可用 bbox，標記 has_image=False
     pictures_raw = raw.get("pictures", [])
     is_pdf = pdf_path.suffix.lower() == ".pdf"
     is_office = suffix in {".docx", ".pptx"}
-    if is_pdf and output_dir and pictures_raw:
-        pictures = _materialize_pictures(pdf_path, pictures_raw, output_dir, page_sizes)
-    elif is_office and output_dir and pictures_raw:
-        pictures = _materialize_pictures_from_uri(pictures_raw, output_dir, pdf_path.stem)
+    if is_pdf and pictures_raw:
+        pictures = _materialize_pictures(pdf_path, pictures_raw, page_sizes)
     else:
-        pictures = [dict(p, path=None, sha256=None, has_image=False) for p in pictures_raw]
+        pictures = [dict(p, has_image=False) for p in pictures_raw]
     raw["pictures"] = pictures
 
-    # 3b. 整頁圖片（有圖片的頁面 + 無文字的頁面）
+    # 3b. 視覺頁面參考（不渲染，供 Layer E 按需使用）
     page_images: dict[int, dict] = {}
-    if is_pdf and output_dir:
-        try:
-            import fitz as _fitz
-            # 有圖片的頁
-            pic_pages = {
-                prov.get("page_no")
-                for pic in pictures if pic.get("has_image")
-                for prov in pic.get("prov", [])
-                if prov.get("page_no")
-            }
-            # 無文字的頁（掃描頁）
-            qc_tmp = _compute_qc(raw, page_count, pictures, True)
-            no_item_pages = set(qc_tmp.get("pages_no_extracted_items", []))
-            full_pages = pic_pages | no_item_pages
-
-            if full_pages:
-                img_dir = output_dir / "figures"
-                img_dir.mkdir(parents=True, exist_ok=True)
-                doc = _fitz.open(str(pdf_path))
-                try:
-                    for pn in sorted(full_pages):
-                        idx = pn - 1
-                        if idx >= len(doc):
-                            continue
-                        pixmap    = doc[idx].get_pixmap(dpi=150)
-                        png_bytes = pixmap.tobytes("png")
-                        sha256    = hashlib.sha256(png_bytes).hexdigest()
-                        fpath     = img_dir / f"{pdf_path.stem}_p{pn}_full.png"
-                        if not fpath.exists():
-                            fpath.write_bytes(png_bytes)
-                        page_images[pn] = {
-                            "path":      str(fpath.relative_to(output_dir)),
-                            "sha256":    sha256,
-                            "has_image": True,
-                        }
-                finally:
-                    doc.close()
-        except Exception:
-            pass  # 整頁圖片失敗不中斷主流程
-
-    elif is_office and output_dir:
-        try:
-            import subprocess, tempfile
-            import fitz as _fitz
-            with tempfile.TemporaryDirectory() as _tmpdir:
-                _lo_result = subprocess.run(
-                    ["libreoffice", "--headless", "--convert-to", "pdf",
-                     "--outdir", _tmpdir, str(pdf_path)],
-                    capture_output=True, timeout=120,
-                )
-                if _lo_result.returncode == 0:
-                    _pdf_path = Path(_tmpdir) / (pdf_path.stem + ".pdf")
-                    if _pdf_path.exists():
-                        visual_pages: set[int] = set()
-                        # 有圖片的頁（用 pictures_raw：只要 Docling 偵測到圖片，不管 URI 是否解碼成功）
-                        for pic in pictures_raw:
-                            for prov in pic.get("prov", []):
-                                pn = prov.get("page_no")
-                                if pn:
-                                    visual_pages.add(pn)
-
-                        if visual_pages:
-                            img_dir = output_dir / "figures"
-                            img_dir.mkdir(parents=True, exist_ok=True)
-                            _doc = _fitz.open(str(_pdf_path))
-                            try:
-                                for pn in sorted(visual_pages):
-                                    idx = pn - 1
-                                    if idx >= len(_doc):
-                                        continue
-                                    pixmap    = _doc[idx].get_pixmap(dpi=150)
-                                    png_bytes = pixmap.tobytes("png")
-                                    sha256    = hashlib.sha256(png_bytes).hexdigest()
-                                    fpath     = img_dir / f"{pdf_path.stem}_p{pn}_full.png"
-                                    if not fpath.exists():
-                                        fpath.write_bytes(png_bytes)
-                                    page_images[pn] = {
-                                        "path":      str(fpath.relative_to(output_dir)),
-                                        "sha256":    sha256,
-                                        "has_image": True,
-                                    }
-                            finally:
-                                _doc.close()
-        except Exception:
-            pass  # page_images 失敗不中斷主流程
+    if is_pdf:
+        # 有圖片的頁
+        pic_pages = {
+            prov.get("page_no")
+            for pic in pictures if pic.get("has_image")
+            for prov in pic.get("prov", [])
+            if prov.get("page_no")
+        }
+        # 無文字的頁（掃描頁）
+        qc_tmp = _compute_qc(raw, page_count, pictures, output_dir is not None)
+        no_item_pages = set(qc_tmp.get("pages_no_extracted_items", []))
+        for pn in sorted(pic_pages | no_item_pages):
+            page_images[pn] = {"pdf_path": str(pdf_path), "page_no": pn, "has_image": True}
+    elif is_office:
+        # DOCX/PPTX：記錄有圖片的頁碼，不做 LibreOffice 轉換
+        for pic in pictures_raw:
+            for prov in pic.get("prov", []):
+                pn = prov.get("page_no")
+                if pn:
+                    page_images[pn] = {"docx_path": str(pdf_path), "page_no": pn, "has_image": True}
 
     # 4. metadata
     metadata = build_metadata(

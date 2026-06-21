@@ -17,7 +17,7 @@ CU API 原始輸出直接保留：
   metadata      — 標準四層
 
 Layer A 獨有（需要 PDF 原檔）：
-  page_images       — 視覺頁面的整頁圖片
+  page_images       — 視覺頁面的參考結構（pdf_path + page_no，不存圖）
   checkbox_states   — 各頁 checkbox 勾選狀態
 
 不輸出：blocks / chunks（由後續層負責）
@@ -27,7 +27,7 @@ analyzer_id    ：prebuilt-layout
 """
 
 from __future__ import annotations
-import base64, re, hashlib, sys
+import base64, re, sys
 from pathlib import Path
 
 # config.py 在 lib/ 的上層目錄
@@ -110,16 +110,15 @@ def _figure_bbox(source_str: str) -> tuple[int, float, float, float, float] | No
     return page_no, min(xs), min(ys), max(xs), max(ys)
 
 
-def _save_page_images(
+def _page_image_refs(
     pdf_path: Path,
     raw_figures: list[dict],
     confidence: dict,
-    output_dir: Path | None,
     category: str = "",
     page_count: int = 0,
     checkbox_pages: set[int] | None = None,
 ) -> dict[int, dict]:
-    """視覺頁面的整頁圖片存檔。
+    """回傳視覺頁面的參考結構（不存圖，按需由 Layer E 渲染）。
 
     觸發條件（任一）：
     1. 頁面有任何 CU figure（從 source 解析頁碼）
@@ -128,11 +127,8 @@ def _save_page_images(
     4. 頁面有嵌入圖 >= 2.0 sqin（fitz get_image_info()）
     5. 頁面在 checkbox_pages 中（有偵測到 checkbox）
 
-    Returns: {page_no: {"path": str, "sha256": str, "has_image": bool}}
+    Returns: {page_no: {"pdf_path": str, "page_no": int, "has_image": bool}}
     """
-    if output_dir is None:
-        return {}
-
     import fitz
 
     visual_pages: set[int] = set()
@@ -177,33 +173,13 @@ def _save_page_images(
                             break
             except Exception:
                 pass
-
-        if not visual_pages:
-            return {}
-
-        img_dir = output_dir / "figures"
-        img_dir.mkdir(parents=True, exist_ok=True)
-
-        page_images: dict[int, dict] = {}
-        for page_no in sorted(visual_pages):
-            page_idx = page_no - 1
-            if page_idx >= len(doc):
-                continue
-            pixmap   = doc[page_idx].get_pixmap(dpi=150)
-            png_bytes = pixmap.tobytes("png")
-            sha256   = hashlib.sha256(png_bytes).hexdigest()
-            fpath    = img_dir / f"{pdf_path.stem}_p{page_no}_full.png"
-            if not fpath.exists():
-                fpath.write_bytes(png_bytes)
-            page_images[page_no] = {
-                "path":      str(fpath.relative_to(output_dir)),
-                "sha256":    sha256,
-                "has_image": True,
-            }
     finally:
         doc.close()
 
-    return page_images
+    return {
+        page_no: {"pdf_path": str(pdf_path), "page_no": page_no, "has_image": True}
+        for page_no in sorted(visual_pages)
+    }
 
 
 def _detect_checkbox_states(doc, page_no: int) -> list[dict]:
@@ -519,12 +495,11 @@ def convert_pdf_azure_cu(
     except Exception:
         pass
 
-    # ── 6a. 整頁圖片（流程圖、掃描頁）─────────────────────────────────────
-    page_images = _save_page_images(
+    # ── 6a. 視覺頁面參考（供 Layer E 按需渲染）──────────────────────────
+    page_images = _page_image_refs(
         pdf_path,
         raw_figures=raw.get("figures", []),
         confidence=confidence,
-        output_dir=output_dir,
         category=category,
         page_count=page_count,
         checkbox_pages=set(checkbox_states_by_page.keys()) if checkbox_states_by_page else None,
