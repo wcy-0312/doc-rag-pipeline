@@ -29,6 +29,19 @@ class LLMClient(abc.ABC):
             user = user_parts
         return self.generate(system, user)
 
+    def generate_with_tools(self, messages: list, tools: list) -> tuple:
+        """Override in subclasses that support function calling.
+
+        Returns:
+            (tool_calls, None)  — LLM wants to call tools
+            ([], content_str)   — LLM gives final answer
+
+        tool_calls: list of {"id": str, "name": str, "arguments": dict}
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support tool calling. Use GPT41Client."
+        )
+
 
 class _StubLLMClient(LLMClient):
     def generate(self, system: str, user: str) -> dict:
@@ -38,6 +51,15 @@ class _StubLLMClient(LLMClient):
             "abstain": False,
             "abstain_reason": None,
         }
+
+    def generate_with_tools(self, messages: list, tools: list) -> tuple:
+        content = json.dumps({
+            "answer": "stub",
+            "claims": [{"text": "stub claim", "citations": ["E1"]}],
+            "abstain": False,
+            "abstain_reason": None,
+        })
+        return ([], content)
 
 
 class Gemma3Client(LLMClient):
@@ -87,6 +109,27 @@ class GPT41Client(LLMClient):
         )
         raw = response.choices[0].message.content
         return _parse_json_response(raw)
+
+    def generate_with_tools(self, messages: list, tools: list) -> tuple:
+        response = self._client.chat.completions.create(
+            model=self._deployment,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            temperature=0.0,
+        )
+        msg = response.choices[0].message
+        if msg.tool_calls:
+            tool_calls = [
+                {
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": json.loads(tc.function.arguments),
+                }
+                for tc in msg.tool_calls
+            ]
+            return (tool_calls, None)
+        return ([], msg.content)
 
 
 class Gemma4Client(LLMClient):

@@ -63,3 +63,24 @@ def test_generate_multimodal_fallback_content_list(stub):
     ]
     result = stub.generate_multimodal(messages)
     assert result["answer"] == "stub"
+
+
+def test_stub_generate_with_tools_returns_final_answer():
+    import json
+    stub = _StubLLMClient()
+    tool_calls, content = stub.generate_with_tools(
+        messages=[{"role": "user", "content": "test"}],
+        tools=[],
+    )
+    assert tool_calls == []
+    assert content is not None
+    parsed = json.loads(content)
+    assert "answer" in parsed
+    assert "claims" in parsed
+
+
+def test_stub_generate_with_tools_no_tool_calls():
+    stub = _StubLLMClient()
+    tool_calls, _ = stub.generate_with_tools(messages=[], tools=[])
+    assert isinstance(tool_calls, list)
+    assert len(tool_calls) == 0
