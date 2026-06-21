@@ -1,7 +1,7 @@
 import sys, os
 
 from layer_b.models import IRCell, IRTable, QC
-from layer_b.normalizers.merger import merge_cross_page
+from layer_b.table import merge_cross_page
 
 
 def _make_cell(row, col, content, is_col_header=False, is_row_header=False):

@@ -1,7 +1,7 @@
 import sys, os
 
 from layer_b.models import IRCell, IRTable, QC
-from layer_b.normalizers.header_path import build_header_paths
+from layer_b.table import build_header_paths
 
 
 def _cell(row, col, content, row_span=1, col_span=1,

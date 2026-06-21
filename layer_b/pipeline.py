@@ -3,9 +3,7 @@ import re
 from dataclasses import replace
 from pathlib import Path as _Path
 from layer_b.adapters import adapt, get_source_tool
-from layer_b.normalizers.merger import merge_cross_page, expand_spans
-from layer_b.normalizers.header_path import build_header_paths
-from layer_b.formatters.formatter import linearize_kv, to_json, to_markdown
+from layer_b.table import merge_cross_page, expand_spans, build_header_paths, linearize_kv, to_json, to_markdown
 from layer_b.models import IRDocument, RetrievalUnit
 
 SHORT_DOC_THRESHOLD = 500

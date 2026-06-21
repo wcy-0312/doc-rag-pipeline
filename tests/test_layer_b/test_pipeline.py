@@ -1,9 +1,8 @@
 
 import pytest
 from layer_b.models import IRCell, IRTable, QC, RetrievalUnit
-from layer_b.normalizers.header_path import build_header_paths
+from layer_b.table import build_header_paths, to_markdown
 from layer_b.pipeline import assess
-from layer_b.formatters.formatter import to_markdown
 from layer_b.pipeline import process_document, _continuous_weight
 
 

@@ -1,8 +1,7 @@
 import sys, os
 
 from layer_b.models import IRCell, IRTable, QC
-from layer_b.normalizers.header_path import build_header_paths
-from layer_b.formatters.formatter import linearize_kv, to_json
+from layer_b.table import build_header_paths, linearize_kv, to_json
 
 
 def _cell(row, col, content, is_col_header=False, is_row_header=False):
