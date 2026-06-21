@@ -122,3 +122,45 @@ def test_hard_limit_prevents_infinite_loop():
     result = pipeline.run("query", [r])
     # Must return some result (abstain or answer), never loop forever
     assert isinstance(result, GenerationResult)
+
+
+# ── RAGPipeline integration ───────────────────────────────────────────────────
+
+from unittest.mock import patch
+from pipeline.runner import RAGPipeline
+
+
+def test_rag_pipeline_query_agentic_returns_result(tmp_path):
+    import fitz
+    doc = fitz.open()
+    doc.new_page()
+    pdf_path = str(tmp_path / "test.pdf")
+    doc.save(pdf_path)
+    doc.close()
+
+    mock_qdrant = MagicMock()
+    mock_provider = MagicMock()
+    mock_provider.embed.return_value = [[0.1] * 1024]
+
+    with patch("pipeline.runner.HybridRetriever") as MockRetriever, \
+         patch("pipeline.runner.DocumentIngester"), \
+         patch("pipeline.runner.BGEReranker"), \
+         patch("layer_e.agentic_pipeline.AgenticPipeline.run") as mock_run:
+
+        mock_run.return_value = GenerationResult(
+            answer="agentic answer",
+            claims=[],
+            evidence_map={},
+            unsupported_claims=[],
+            abstain=False,
+            abstain_reason=None,
+            safety_verdict="safe",
+            steps_log=[{"step_no": 1, "tool": "get_page_image"}],
+        )
+        MockRetriever.return_value.search_text.return_value = []
+
+        pipeline = RAGPipeline(mock_provider, mock_qdrant, "test_collection")
+        result = pipeline.query_agentic("cT2N1M0 治療建議", pdf_path=pdf_path)
+
+    assert result.answer == "agentic answer"
+    assert len(result.steps_log) == 1

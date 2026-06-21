@@ -18,7 +18,10 @@ from typing import List, Optional
 from layer_b.pipeline import process_document
 from layer_c.pipeline import process_and_embed
 from layer_d.ingestion import DocumentIngester
+from layer_d.reranker import BGEReranker
 from layer_d.retrieval import HybridRetriever
+from layer_e.agentic_pipeline import AgenticPipeline
+from layer_e.llm_client import GPT41Client
 from layer_e.pipeline import generate, GenerationPipeline
 
 
@@ -68,7 +71,6 @@ class RAGPipeline:
         reranker:
             BGEReranker instance (or compatible). Defaults to BGEReranker() if None.
         """
-        from layer_d.reranker import BGEReranker
         _reranker = reranker if reranker is not None else BGEReranker()
         self._provider = embedding_provider
         self._ingester = DocumentIngester(
@@ -134,3 +136,39 @@ class RAGPipeline:
             query_text, top_k=top_k, prefetch_k=prefetch_k, rerank=rerank
         )                                                 # D: hybrid retrieval
         return self._gen.run(query_text, ranked)          # E: generation
+
+    def query_agentic(
+        self,
+        query_text: str,
+        pdf_path: str,
+        top_k: int = 5,
+        prefetch_k: int = 20,
+        rerank: bool = True,
+    ):
+        """Retrieve evidence then run the agentic loop with GPT-4.1 tool calling.
+
+        Parameters
+        ----------
+        query_text:
+            Natural language question.
+        pdf_path:
+            Absolute path to the original PDF file (for on-demand screenshots).
+        top_k, prefetch_k, rerank:
+            Same as query().
+
+        Returns
+        -------
+        GenerationResult
+            Same structure as query(), plus .steps_log with the agentic trace.
+        """
+        ranked = self._retriever.search_text(
+            query_text, top_k=top_k, prefetch_k=prefetch_k, rerank=rerank
+        )
+        doc_stem = self._ingester.collection_name  # collection name doubles as doc stem
+        agentic = AgenticPipeline(
+            llm_client=GPT41Client(),
+            retriever=self._retriever,
+            pdf_path=pdf_path,
+            doc_stem=doc_stem,
+        )
+        return agentic.run(query_text, ranked)
