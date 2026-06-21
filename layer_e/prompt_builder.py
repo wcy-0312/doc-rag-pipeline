@@ -22,7 +22,7 @@ _SYSTEM_INSTRUCTIONS = """你是醫療知識庫助理，專門協助醫護人員
 }"""
 
 
-def _format_evidence_block(evidence_list: list) -> str:
+def format_evidence_block(evidence_list: list) -> str:
     lines = []
     for idx, item in enumerate(evidence_list, start=1):
         label = f"E{idx}"
@@ -79,6 +79,6 @@ def format_references(evidence_map: dict, cited_eids: set | None = None) -> str:
 
 
 def build(evidence_list: list, query: str) -> dict:
-    evidence_block = _format_evidence_block(evidence_list)
+    evidence_block = format_evidence_block(evidence_list)
     system = _SYSTEM_INSTRUCTIONS + "\n\n" + evidence_block
     return {"system": system, "user": query}

@@ -29,3 +29,4 @@ class GenerationResult:
     abstain: bool
     abstain_reason: Optional[str]
     safety_verdict: str
+    steps_log: List[dict] = field(default_factory=list)  # default so existing callers are unaffected
