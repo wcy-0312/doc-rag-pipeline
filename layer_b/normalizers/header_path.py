@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from layer_b.models import IRCell, IRTable
 
 
@@ -20,7 +20,6 @@ class LabelledTable:
     source_tool: str
     source_pages: list[int]
     cells: list[LabelledCell]
-    page_image_refs: dict[str, str] = field(default_factory=dict)
 
 
 def build_header_paths(table: IRTable) -> LabelledTable:
@@ -94,5 +93,4 @@ def build_header_paths(table: IRTable) -> LabelledTable:
         source_tool=table.source_tool,
         source_pages=table.source_pages,
         cells=labelled,
-        page_image_refs=table.page_image_refs,
     )

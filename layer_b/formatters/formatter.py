@@ -133,7 +133,6 @@ def to_json(table: LabelledTable) -> dict:
         "table_id": table.table_id,
         "source_tool": table.source_tool,
         "source_pages": table.source_pages,
-        "page_image_refs": table.page_image_refs,
         "rows": rows,
     }
 

@@ -47,7 +47,6 @@ def expand_spans(table: IRTable) -> IRTable:
         source_pages=table.source_pages,
         cells=expanded,
         qc=table.qc,
-        page_image_refs=table.page_image_refs,
     )
 
 
@@ -136,7 +135,6 @@ def _merge(a: IRTable, b: IRTable) -> IRTable:
         ))
 
     merged_pages = sorted(set(a.source_pages + b.source_pages))
-    merged_image_refs = {**a.page_image_refs, **b.page_image_refs}
 
     return IRTable(
         table_id=a.table_id,
@@ -144,7 +142,6 @@ def _merge(a: IRTable, b: IRTable) -> IRTable:
         source_pages=merged_pages,
         cells=a.cells + b_body_cells,
         qc=a.qc,
-        page_image_refs=merged_image_refs,
     )
 
 

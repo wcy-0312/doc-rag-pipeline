@@ -21,7 +21,6 @@ def _make_table(table_id, pages, cells, caption=""):
         source_pages=pages,
         cells=cells,
         qc=QC(),
-        page_image_refs={str(p): f"img/p{p}.png" for p in pages},
     )
     t.caption = caption
     return t
@@ -47,7 +46,6 @@ def test_three_page_merge_header_match():
     result = merge_cross_page(tables)
     assert len(result) == 1
     assert result[0].source_pages == [2, 3, 4]
-    assert result[0].page_image_refs == {"2": "img/p2.png", "3": "img/p3.png", "4": "img/p4.png"}
     # header 只留一份
     headers = [c for c in result[0].cells if c.is_col_header]
     assert len(headers) == 2

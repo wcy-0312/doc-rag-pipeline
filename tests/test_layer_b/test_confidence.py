@@ -10,10 +10,7 @@ def _cell(conf=None, header_source="flag", is_col_header=False, is_row_header=Fa
                   header_source=header_source, confidence=conf)
 
 
-_DEFAULT_PAGE_IMAGES = {"1": "img/p1.png"}
-
-
-def _table(cells, empty_cell_rate=0.0, warnings=None, page_images=_DEFAULT_PAGE_IMAGES,
+def _table(cells, empty_cell_rate=0.0, warnings=None,
            estimated_info_loss_rate=None, word_avg=None, low_confidence_rate=None):
     return IRTable(
         table_id="t_000", source_tool="azure_cu", source_pages=[1],
@@ -26,7 +23,6 @@ def _table(cells, empty_cell_rate=0.0, warnings=None, page_images=_DEFAULT_PAGE_
             low_confidence_rate=low_confidence_rate,
             estimated_info_loss_rate=estimated_info_loss_rate,
         ),
-        page_image_refs=page_images,
     )
 
 
@@ -105,22 +101,6 @@ def test_heuristic_header_medium():
     assert any("heuristic" in r for r in result["reasons"])
 
 
-# ── 9. test_fallback_available ────────────────────────────────────────────────
-
-def test_fallback_available():
-    """page_image_refs non-empty → fallback_available=True"""
-    result = assess(_table([_cell()], page_images={"1": "img/p1.png"}))
-    assert result["fallback_available"] is True
-
-
-# ── 10. test_no_fallback ──────────────────────────────────────────────────────
-
-def test_no_fallback():
-    """page_image_refs={} → fallback_available=False"""
-    result = assess(_table([_cell()], page_images={}))
-    assert result["fallback_available"] is False
-
-
 if __name__ == "__main__":
     test_high_confidence()
     test_medium_info_loss()
@@ -130,6 +110,4 @@ if __name__ == "__main__":
     test_high_empty_cell_rate()
     test_low_word_avg()
     test_heuristic_header_medium()
-    test_fallback_available()
-    test_no_fallback()
     print("All confidence tests passed.")

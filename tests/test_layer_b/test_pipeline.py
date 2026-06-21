@@ -17,7 +17,7 @@ def _cell(row, col, content, is_col_header=False, is_row_header=False):
 
 
 def _labelled(cells, table_id="t_001"):
-    t = IRTable(table_id, "azure_cu", [1], cells, QC(), {"1": "img/p1.png"})
+    t = IRTable(table_id, "azure_cu", [1], cells, QC())
     return build_header_paths(t)
 
 
@@ -187,7 +187,6 @@ def test_retrieval_unit_confidence_levels_via_assess():
             table_id="t_x", source_tool="azure_cu", source_pages=[1],
             cells=[c],
             qc=QC(estimated_info_loss_rate=info_loss, word_avg=word_avg),
-            page_image_refs={},
         )
 
     # high: info_loss=0.01, word_avg=0.95

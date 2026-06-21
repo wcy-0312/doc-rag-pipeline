@@ -2,22 +2,6 @@ from __future__ import annotations
 from layer_b.models import BoundingBox, IRCell, IRTable, QC
 
 
-def _resolve_image_path(page_images: dict, page: int | str) -> str:
-    """Resolve page_image_refs value for a given page key.
-
-    Supports both int and string keys (JSON deserialisation may convert int
-    keys to strings) and both plain-string values (legacy) and dict values
-    of the form ``{"path": "...", "sha256": "...", "has_image": True}``.
-    """
-    v = page_images.get(str(page))
-    if v is None:
-        v = page_images.get(page)
-    if v is None:
-        return ""
-    if isinstance(v, dict):
-        return v.get("path", "")
-    return v or ""
-
 _FALLBACK_WARNING = "AZURE_DI_FALLBACK_TO_DOCLING"
 
 
@@ -83,7 +67,6 @@ def adapt(raw: dict) -> list[IRTable]:
     route to docling_adapter instead. This adapter handles the Azure DI path.
     """
     metadata = raw.get("metadata", {})
-    page_images: dict[str, str] = raw.get("data", {}).get("page_images", {})
     qc = _parse_qc(metadata)
 
     tables = raw.get("data", {}).get("tables", [])
@@ -105,7 +88,6 @@ def adapt(raw: dict) -> list[IRTable]:
             source_pages=pages,
             cells=cells,
             qc=qc,
-            page_image_refs={str(p): _resolve_image_path(page_images, p) for p in pages},
         ))
 
     return result

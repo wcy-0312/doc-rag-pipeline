@@ -67,8 +67,6 @@ def assess(table) -> dict:
             "level": "high" | "medium" | "low",
             "score": float | None,   # estimated_info_loss_rate (lower is better)
             "reasons": list[str],
-            "fallback_available": bool,
-            "page_image_refs": dict,
         }
     """
     reasons: list[str] = []
@@ -137,8 +135,6 @@ def assess(table) -> dict:
         "level": level,
         "score": score,
         "reasons": reasons,
-        "fallback_available": bool(table.page_image_refs),
-        "page_image_refs": table.page_image_refs,
     }
 
 
@@ -449,18 +445,6 @@ def _doc_confidence(raw: dict) -> tuple[str, str, float]:
     return level, flag, weight
 
 
-def _resolve_page_image(page_images: dict, page: int | None) -> str:
-    """Resolve image path for a given page from page_images dict."""
-    if page is None:
-        return ""
-    v = page_images.get(str(page)) or page_images.get(page)
-    if v is None:
-        return ""
-    if isinstance(v, dict):
-        return v.get("path", "")
-    return v or ""
-
-
 def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metadata: dict | None = None) -> list[RetrievalUnit]:
     """Extract paragraph-path RetrievalUnits from raw document data.
 
@@ -468,7 +452,6 @@ def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metad
     """
     data = raw["data"]
     styles = data.get("styles", [])
-    page_images = data.get("page_images", {})
     source_tool = _normalize_source_tool(source_tool)
 
     if source_tool == "azure_cu":
@@ -543,11 +526,6 @@ def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metad
             quality_flag=quality_flag,
             retrieval_weight=retrieval_weight,
             source_pages=source_pages,
-            page_image_refs={
-                str(p): path
-                for p in source_pages
-                if (path := _resolve_page_image(page_images, p))
-            },
             doc_metadata=doc_metadata or {},
         )]
 
@@ -560,7 +538,6 @@ def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metad
         content = cand["content"]
         embedding_text = f"{hb}\n{content}" if hb else content
         display_markdown = f"**{hb}**\n\n{content}" if hb else content
-        img_path = _resolve_page_image(page_images, page)
         para_id = f"{doc_prefix}_p_{source_tool}_{page_str}_{idx:03d}" if doc_prefix else f"p_{source_tool}_{page_str}_{idx:03d}"
         units.append(RetrievalUnit(
             retrieval_unit_id=para_id,
@@ -582,7 +559,6 @@ def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metad
             quality_flag=quality_flag,
             retrieval_weight=retrieval_weight,
             source_pages=[page] if page is not None else [],
-            page_image_refs={str(page): img_path} if img_path else {},
             doc_metadata=doc_metadata or {},
         ))
     return units
@@ -629,7 +605,6 @@ def _table_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metadata:
             quality_flag=flag,
             retrieval_weight=weight,
             source_pages=t.source_pages,
-            page_image_refs=conf["page_image_refs"],
             row_texts=row_texts,
             doc_metadata=doc_metadata or {},
         ))
@@ -673,7 +648,6 @@ def _figure_path(raw: dict, source_tool: str, doc_prefix: str, doc_metadata: dic
     """Generate RetrievalUnit for each meaningful figure (has_image=True, area_sqin >= 0.5)."""
     data = raw.get("data", {})
     figures = data.get("figures", [])
-    page_images = data.get("page_images", {})
     confidence_level, quality_flag, retrieval_weight = _doc_confidence(raw)
     norm_tool = _normalize_source_tool(source_tool)
     page_context_map = _build_page_context_map(data, norm_tool)
@@ -696,9 +670,6 @@ def _figure_path(raw: dict, source_tool: str, doc_prefix: str, doc_metadata: dic
         else:
             embedding_text = f"[圖表 第{page}頁]" if page else "[圖表]"
 
-        img_path = _resolve_page_image(page_images, page)
-        page_image_refs = {str(page): img_path} if img_path else {}
-
         unit_id = f"{doc_prefix}_f_{seq:03d}" if doc_prefix else f"f_{seq:03d}"
         display = f"![figure]({fig.get('path', '')})"
         if caption_text:
@@ -720,7 +691,6 @@ def _figure_path(raw: dict, source_tool: str, doc_prefix: str, doc_metadata: dic
             quality_flag=quality_flag,
             retrieval_weight=retrieval_weight,
             source_pages=[page] if page is not None else [],
-            page_image_refs=page_image_refs,
             row_texts=[],
             doc_metadata=doc_metadata or {},
         ))
@@ -794,7 +764,6 @@ def _high_graphics_path(
             quality_flag=quality_flag,
             retrieval_weight=retrieval_weight * 0.9,  # 輕微降權，因無直接文字
             source_pages=[page],
-            page_image_refs={str(page): img_path} if img_path else {},
             row_texts=[],
             doc_metadata=doc_metadata or {},
         ))
@@ -821,7 +790,6 @@ def _document_path(raw: dict) -> list[RetrievalUnit]:
                     quality_flag="ok",
                     retrieval_weight=_continuous_weight(None),
                     source_pages=[],
-                    page_image_refs={},
                     doc_id=doc.doc_id,
                     section_id=section.section_id,
                     section_title=section.title,

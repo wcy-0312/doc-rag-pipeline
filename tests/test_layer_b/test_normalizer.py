@@ -19,7 +19,7 @@ def _make_table(cells):
     return IRTable(
         table_id="t_000", source_tool="azure_cu",
         source_pages=[1], cells=cells,
-        qc=QC(), page_image_refs={},
+        qc=QC(),
     )
 
 
@@ -113,18 +113,16 @@ def test_empty_table():
 
 
 def test_metadata_preserved():
-    """table_id、source_pages、page_image_refs 應保持不變。"""
+    """table_id、source_pages、qc 應保持不變。"""
     t = IRTable(
         table_id="t_007", source_tool="docling",
         source_pages=[3, 4],
         cells=[_make_cell(0, 0, "X")],
         qc=QC(empty_cell_rate=0.1),
-        page_image_refs={"3": "p3.png", "4": "p4.png"},
     )
     result = expand_spans(t)
     assert result.table_id == "t_007"
     assert result.source_pages == [3, 4]
-    assert result.page_image_refs == {"3": "p3.png", "4": "p4.png"}
     assert result.qc.empty_cell_rate == 0.1
 
 

@@ -17,7 +17,7 @@ def _cell(row, col, content, row_span=1, col_span=1,
 
 
 def _table(cells):
-    return IRTable("t_000", "azure_cu", [1], cells, QC(), {})
+    return IRTable("t_000", "azure_cu", [1], cells, QC())
 
 
 def _at(labelled_cells, row, col):

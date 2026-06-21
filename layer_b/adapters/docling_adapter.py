@@ -3,23 +3,6 @@ from typing import Any
 from layer_b.models import BoundingBox, IRCell, IRTable, QC
 
 
-def _resolve_image_path(page_images: dict, page: int | str) -> str:
-    """Resolve page_image_refs value for a given page key.
-
-    Supports both int and string keys (JSON deserialisation may convert int
-    keys to strings) and both plain-string values (legacy) and dict values
-    of the form ``{"path": "...", "sha256": "...", "has_image": True}``.
-    """
-    v = page_images.get(str(page))
-    if v is None:
-        v = page_images.get(page)
-    if v is None:
-        return ""
-    if isinstance(v, dict):
-        return v.get("path", "")
-    return v or ""
-
-
 def _parse_bounding_box(bbox: dict | None) -> BoundingBox | None:
     if not bbox:
         return None
@@ -79,7 +62,6 @@ def _parse_qc(metadata: dict) -> QC:
 def adapt(raw: dict) -> list[IRTable]:
     """Convert Docling native output to list of IRTable."""
     metadata = raw.get("metadata", {})
-    page_images: dict[str, str] = raw.get("data", {}).get("page_images", {})
     qc = _parse_qc(metadata)
 
     tables = raw.get("data", {}).get("tables", [])
@@ -99,7 +81,6 @@ def adapt(raw: dict) -> list[IRTable]:
             source_pages=pages,
             cells=cells,
             qc=qc,
-            page_image_refs={str(p): _resolve_image_path(page_images, p) for p in pages},
         ))
 
     return result

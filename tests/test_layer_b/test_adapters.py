@@ -172,7 +172,6 @@ def test_docling_empty_prov_source_pages():
     assert tables[0].source_pages == [], (
         "prov=[] 時 source_pages 應為 []，不應 hardcode 為 [1]"
     )
-    assert tables[0].page_image_refs == {}
 
 
 # ── Azure DI adapter ─────────────────────────────────────────────────────────
@@ -237,57 +236,6 @@ def test_azure_di_fallback_routes_to_docling():
     assert tables[0].cells[0].header_source == "flag"
 
 
-# ── 修正 ④：page_image_refs dict structure tests ──────────────────────────────
-
-def test_azure_cu_page_image_refs_dict_structure():
-    """page_images 為 dict 結構時，page_image_refs["1"] 應為路徑字串而非整個 dict。"""
-    page_images = {"1": {"path": "figures/x.png", "sha256": "abc", "has_image": True}}
-    cells = [
-        {"rowIndex": 0, "columnIndex": 0, "rowSpan": 1, "columnSpan": 1,
-         "content": "項目", "kind": "columnHeader", "confidence": 0.99,
-         "boundingRegions": [{"pageNumber": 1, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}]},
-    ]
-    tables = azure_cu_adapter.adapt(_azure_raw(cells, page_images=page_images))
-    assert len(tables) == 1
-    ref = tables[0].page_image_refs.get("1")
-    assert ref == "figures/x.png", f"Expected 'figures/x.png', got {ref!r}"
-
-
-def test_docling_page_image_refs_dict_structure():
-    """page_images 為 dict 結構時，page_image_refs["1"] 應為路徑字串而非整個 dict。"""
-    page_images = {"1": {"path": "figures/x.png", "sha256": "abc", "has_image": True}}
-    cells = [
-        {"start_row_offset_idx": 0, "start_col_offset_idx": 0,
-         "row_span": 1, "col_span": 1, "text": "項目",
-         "column_header": True, "row_header": False, "bbox": None},
-    ]
-    tables = docling_adapter.adapt(_docling_raw(cells, page_images=page_images))
-    assert len(tables) == 1
-    ref = tables[0].page_image_refs.get("1")
-    assert ref == "figures/x.png", f"Expected 'figures/x.png', got {ref!r}"
-
-
-def test_azure_di_page_image_refs_dict_structure():
-    """page_images 為 dict 結構時，page_image_refs["1"] 應為路徑字串而非整個 dict。"""
-    page_images = {"1": {"path": "figures/x.png", "sha256": "abc", "has_image": True}}
-    cells = [
-        {"rowIndex": 0, "columnIndex": 0, "rowSpan": 1, "columnSpan": 1,
-         "content": "項目",
-         "boundingRegions": [{"pageNumber": 1, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}]},
-    ]
-    raw = {
-        "metadata": {"qc": {"empty_cell_rate": 0.0, "qc_level": "ok", "warnings": []}},
-        "data": {
-            "tables": [{"cells": cells}],
-            "page_images": page_images,
-        },
-    }
-    tables = azure_di_adapter.adapt(raw)
-    assert len(tables) == 1
-    ref = tables[0].page_image_refs.get("1")
-    assert ref == "figures/x.png", f"Expected 'figures/x.png', got {ref!r}"
-
-
 if __name__ == "__main__":
     test_azure_cu_simple_table()
     test_azure_cu_rowspan()
@@ -299,7 +247,4 @@ if __name__ == "__main__":
     test_azure_di_heuristic_always()
     test_azure_di_no_per_cell_confidence()
     test_azure_di_fallback_routes_to_docling()
-    test_azure_cu_page_image_refs_dict_structure()
-    test_docling_page_image_refs_dict_structure()
-    test_azure_di_page_image_refs_dict_structure()
     print("All tests passed.")

@@ -44,7 +44,6 @@ class IRTable:
     source_pages: list[int]
     cells: list[IRCell]
     qc: QC = field(default_factory=QC)
-    page_image_refs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -83,7 +82,6 @@ class RetrievalUnit:
 
     # Metadata
     source_pages: list[int] = field(default_factory=list)
-    page_image_refs: dict = field(default_factory=dict)
 
     # Row-level text representations（表格路徑有值；語意路徑為 []）
     row_texts: list[str] = field(default_factory=list)

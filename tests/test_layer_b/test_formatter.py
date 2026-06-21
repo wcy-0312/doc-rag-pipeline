@@ -13,7 +13,7 @@ def _cell(row, col, content, is_col_header=False, is_row_header=False):
 
 
 def _labelled(cells):
-    t = IRTable("t_000", "azure_cu", [1], cells, QC(), {"1": "img/p1.png"})
+    t = IRTable("t_000", "azure_cu", [1], cells, QC())
     return build_header_paths(t)
 
 
