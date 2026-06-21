@@ -613,7 +613,7 @@ def _table_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metadata:
         json_out["type"] = "table"
         json_out["merge_rate"] = merge_rate
 
-        row_texts = [_row_to_text(r) for r in json_out.get("rows", []) if _row_to_text(r)]
+        row_texts = [rt for r in json_out.get("rows", []) if (rt := _row_to_text(r))]
         table_id = f"{doc_prefix}_{t.table_id}" if doc_prefix else t.table_id
         markdown_out = to_markdown(lt)
         # azure_di: col-header heuristics make KV linearization unreliable — use markdown always.
