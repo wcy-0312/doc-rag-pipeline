@@ -609,6 +609,7 @@ def _table_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metadata:
         flag = "low" if level == "low" else "ok"
         weight = _continuous_weight(conf["score"])
         json_out = to_json(lt)
+        json_out["type"] = "table"
         json_out["merge_rate"] = merge_rate
 
         row_texts = [_row_to_text(r) for r in json_out.get("rows", []) if _row_to_text(r)]

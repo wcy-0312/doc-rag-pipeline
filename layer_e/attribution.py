@@ -3,7 +3,7 @@ from .models import ClaimCitation, EvidenceItem
 
 _JUDGE_SYSTEM = (
     "你是一個事實查核助理。你的任務是判斷一個 claim 是否可以從提供的 Evidence 中找到支持。\n"
-    "請回答 yes 或 no，並簡短說明原因。"
+    "只輸出 JSON，格式為 {\"answer\": \"yes\"} 或 {\"answer\": \"no\"}，不要加入任何額外文字。"
 )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from typing import List
 
 from layer_c.models import EmbeddedChunk
@@ -13,7 +14,6 @@ def _build_para_doc_metadata(unit: dict) -> dict:
         "quality_flag": unit["quality_flag"],
         "retrieval_weight": unit["retrieval_weight"],
         "source_pages": unit["source_pages"],
-        "page_image_refs": unit["page_image_refs"],
         "has_handwriting": unit["structured_json"].get("has_handwriting", False),
         "excluded_items": unit["structured_json"].get("excluded_items", []),
         "patient_id": doc_meta.get("patient_id"),
@@ -29,7 +29,6 @@ def _build_table_metadata(unit: dict) -> dict:
         "quality_flag": unit["quality_flag"],
         "retrieval_weight": unit["retrieval_weight"],
         "source_pages": unit["source_pages"],
-        "page_image_refs": unit["page_image_refs"],
         "patient_id": doc_meta.get("patient_id"),
         "document_type": doc_meta.get("document_type"),
     }
@@ -132,8 +131,16 @@ def retrieval_unit_to_chunks(unit: dict) -> List[EmbeddedChunk]:
         return result
 
 
-def chunk_units(units: list[dict]) -> list[EmbeddedChunk]:
+def chunk_units(units: list) -> list[EmbeddedChunk]:
+    """將 RetrievalUnit 物件或 dict 的列表轉換為 EmbeddedChunk 列表。
+
+    layer_b.process_document() 返回 list[RetrievalUnit] dataclass 物件，
+    但 retrieval_unit_to_chunks() 使用 dict 語法存取欄位，
+    因此在這裡統一轉換為 dict（使用 dataclasses.asdict）。
+    """
     result = []
     for unit in units:
+        if dataclasses.is_dataclass(unit) and not isinstance(unit, type):
+            unit = dataclasses.asdict(unit)
         result.extend(retrieval_unit_to_chunks(unit))
     return result

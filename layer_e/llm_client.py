@@ -86,20 +86,21 @@ class Gemma3Client(LLMClient):
 class GPT41Client(LLMClient):
     def __init__(self):
         from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-        from openai import AzureOpenAI
-        credential = DefaultAzureCredential()
-        token_provider = get_bearer_token_provider(
-            credential, "https://cognitiveservices.azure.com/.default"
+        self._token_provider = get_bearer_token_provider(
+            DefaultAzureCredential(), "https://ai.azure.com/.default"
         )
-        self._client = AzureOpenAI(
-            azure_ad_token_provider=token_provider,
-            azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT", ""),
-            api_version="2024-12-01-preview",
+        self._endpoint = os.environ.get(
+            "AZURE_OPENAI_ENDPOINT",
+            "https://aif-futago-dev-eus2-01.services.ai.azure.com/openai/v1",
         )
         self._deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
 
+    def _make_client(self):
+        from openai import OpenAI
+        return OpenAI(base_url=self._endpoint, api_key=self._token_provider())
+
     def generate(self, system: str, user: str) -> dict:
-        response = self._client.chat.completions.create(
+        response = self._make_client().chat.completions.create(
             model=self._deployment,
             messages=[
                 {"role": "system", "content": system},
@@ -119,7 +120,7 @@ class GPT41Client(LLMClient):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        response = self._client.chat.completions.create(**kwargs)
+        response = self._make_client().chat.completions.create(**kwargs)
         msg = response.choices[0].message
         if msg.tool_calls:
             tool_calls = [
