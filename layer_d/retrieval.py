@@ -68,7 +68,6 @@ def _point_to_ranked_result(p, rrf_score: float) -> RankedResult:
         source_tool=payload.get("source_tool", ""),
         source_pages=payload.get("source_pages", []),
         embedding_text=payload.get("embedding_text", ""),
-        page_image_refs=payload.get("page_image_refs", {}),
     )
 
 
@@ -255,7 +254,6 @@ class HybridRetriever:
                     metadata=payload,
                     source_tool=payload.get("source_tool", ""),
                     source_pages=payload.get("source_pages", []),
-                    page_image_refs=payload.get("page_image_refs", {}),
                 )
             )
 

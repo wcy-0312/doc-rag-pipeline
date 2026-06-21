@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 
@@ -31,7 +31,6 @@ class RankedResult:
     source_pages: List[int]
     embedding_text: str = ""
     rerank_score: float = 0.0
-    page_image_refs: dict = field(default_factory=dict)
 
 
 @dataclass

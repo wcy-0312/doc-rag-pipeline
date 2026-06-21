@@ -5,7 +5,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from layer_e.context_packer import pack, collect_image_paths
+from layer_e.context_packer import pack
 
 
 @dataclass
@@ -171,54 +171,6 @@ def test_evidence_map_structure():
     assert evidence_map["E2"]["chunk_id"] == "c2"
     assert evidence_map["E2"]["source_pages"] == [3]
 
-
-def test_evidence_map_contains_page_image_refs():
-    r = _make_para("c1", rerank_score=0.9, content="meaningful test content")
-    r.page_image_refs = {"1": "figures/p1.png"}
-    _, evidence_map = pack([r])
-    assert "page_image_refs" in evidence_map["E1"]
-    assert evidence_map["E1"]["page_image_refs"] == {"1": "figures/p1.png"}
-
-
-def test_evidence_map_page_image_refs_absent_when_not_set():
-    r = _make_para("c1", rerank_score=0.9, content="meaningful test content")
-    _, evidence_map = pack([r])
-    assert evidence_map["E1"]["page_image_refs"] == {}
-
-
-def test_collect_image_paths_absolute(tmp_path):
-    img = tmp_path / "p1.png"
-    img.write_bytes(b"\x89PNG")
-    evidence_map = {
-        "E1": {"page_image_refs": {"1": str(img)}},
-    }
-    paths = collect_image_paths(evidence_map, base_dir="")
-    assert str(img) in paths
-
-
-def test_collect_image_paths_relative(tmp_path):
-    img = tmp_path / "p1.png"
-    img.write_bytes(b"\x89PNG")
-    evidence_map = {
-        "E1": {"page_image_refs": {"1": "p1.png"}},
-    }
-    paths = collect_image_paths(evidence_map, base_dir=str(tmp_path))
-    assert str(tmp_path / "p1.png") in paths
-
-
-def test_collect_image_paths_dedup(tmp_path):
-    img = tmp_path / "p1.png"
-    img.write_bytes(b"\x89PNG")
-    evidence_map = {
-        "E1": {"page_image_refs": {"1": str(img)}},
-        "E2": {"page_image_refs": {"1": str(img)}},
-    }
-    paths = collect_image_paths(evidence_map, base_dir="")
-    assert len(paths) == 1
-
-
-def test_collect_image_paths_empty():
-    assert collect_image_paths({}, base_dir="") == []
 
 
 def test_parent_chunk_higher_score_than_row():

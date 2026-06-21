@@ -116,7 +116,6 @@ class DocumentIngester:
                     "has_handwriting":   chunk.metadata.get("has_handwriting", False),
                     "embedding_text":    chunk.embedding_text,
                     "display_markdown":  chunk.display_markdown,
-                    "page_image_refs":   chunk.metadata.get("page_image_refs", {}),
                     "patient_id":        chunk.metadata.get("patient_id"),
                     "document_type":     chunk.metadata.get("document_type"),
                 }

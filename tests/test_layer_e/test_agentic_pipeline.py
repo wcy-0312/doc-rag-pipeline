@@ -23,7 +23,6 @@ class _FakeRankedResult:
     source_pages: List[int] = field(default_factory=lambda: [5])
     embedding_text: str = "cT2N1M0"
     rerank_score: float = 0.8
-    page_image_refs: dict = field(default_factory=dict)
 
 
 def _make_pipeline(llm_client=None, retriever=None):

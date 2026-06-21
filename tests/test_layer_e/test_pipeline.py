@@ -159,51 +159,6 @@ def test_pipeline_backward_compat_no_images():
     assert "multimodal" not in calls
 
 
-def test_pipeline_uses_multimodal_when_images_present(tmp_path):
-    img = tmp_path / "p1.png"
-    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
-
-    @dataclass
-    class _ResultWithImage(_FakeRankedResult):
-        page_image_refs: dict = field(default_factory=dict)
-
-    r = _ResultWithImage(chunk_id="chunk_img")
-    r.page_image_refs = {"1": str(img)}
-
-    calls = []
-
-    class _VisionStub(_StubLLMClient):
-        def generate_multimodal(self, messages: list) -> dict:
-            calls.append(messages)
-            return {
-                "answer": "vision answer",
-                "claims": [{"text": "vision claim", "citations": ["E1"]}],
-                "abstain": False,
-                "abstain_reason": None,
-            }
-
-    result = generate("query", [r], _VisionStub(), skip_unsupported_check=True)
-    assert result.answer == "vision answer"
-    assert len(calls) == 1
-    user_content = calls[0][1]["content"]
-    assert any(b.get("type") == "image_url" for b in user_content)
-
-
-def test_pipeline_fallback_when_llm_no_vision(tmp_path):
-    """LLM that doesn't override generate_multimodal falls back to text via base class."""
-    img = tmp_path / "p1.png"
-    img.write_bytes(b"\x89PNG")
-
-    @dataclass
-    class _ResultWithImage(_FakeRankedResult):
-        page_image_refs: dict = field(default_factory=dict)
-
-    r = _ResultWithImage(chunk_id="chunk_img2")
-    r.page_image_refs = {"1": str(img)}
-
-    result = generate("query", [r], _StubLLMClient(), skip_unsupported_check=True)
-    assert result.answer == "stub"
-
 
 def test_unsupported_marker_no_warning_logged(caplog):
     import logging

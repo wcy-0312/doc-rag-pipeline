@@ -35,14 +35,7 @@ def generate(
     evidence_list, evidence_map = context_packer.pack(ranked_results)
     prompt = prompt_builder.build(evidence_list, query)
 
-    image_paths = context_packer.collect_image_paths(evidence_map)
-    if image_paths:
-        messages = prompt_builder.build_multimodal_messages(
-            prompt["system"], prompt["user"], image_paths
-        )
-        llm_output = llm_client.generate_multimodal(messages)
-    else:
-        llm_output = llm_client.generate(system=prompt["system"], user=prompt["user"])
+    llm_output = llm_client.generate(system=prompt["system"], user=prompt["user"])
 
     # Filter [unsupported] out of citations — it's a model signal, not a valid evidence ID.
     # Claims carrying [unsupported] are collected directly into unsupported_claims.

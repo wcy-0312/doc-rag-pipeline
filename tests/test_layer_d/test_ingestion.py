@@ -321,29 +321,6 @@ def _make_chunk_with_image_refs(
 
 class TestPageImageRefsAndPatientId:
     @patch("layer_d.ingestion._encode_sparse", side_effect=_fake_sparse_weights)
-    def test_page_image_refs_stored_in_payload(self, mock_encode):
-        client = _mock_qdrant_client()
-        ingester = DocumentIngester(client=client, collection_name="medical_docs")
-
-        refs = {"1": "images/page_1.png", "2": "images/page_2.png"}
-        chunk = _make_chunk_with_image_refs(page_image_refs=refs)
-        ingester.ingest([chunk], batch_size=64)
-
-        payload = client.upsert.call_args.kwargs["points"][0].payload
-        assert payload["page_image_refs"] == refs
-
-    @patch("layer_d.ingestion._encode_sparse", side_effect=_fake_sparse_weights)
-    def test_page_image_refs_empty_dict_when_absent(self, mock_encode):
-        client = _mock_qdrant_client()
-        ingester = DocumentIngester(client=client, collection_name="medical_docs")
-
-        chunk = _make_chunk()  # no page_image_refs in metadata
-        ingester.ingest([chunk], batch_size=64)
-
-        payload = client.upsert.call_args.kwargs["points"][0].payload
-        assert payload["page_image_refs"] == {}
-
-    @patch("layer_d.ingestion._encode_sparse", side_effect=_fake_sparse_weights)
     def test_patient_id_stored_in_payload(self, mock_encode):
         client = _mock_qdrant_client()
         ingester = DocumentIngester(client=client, collection_name="medical_docs")
