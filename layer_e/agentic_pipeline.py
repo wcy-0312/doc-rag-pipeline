@@ -84,16 +84,15 @@ class AgenticPipeline:
         steps_log = []
         tool_call_count = 0
 
-        for iteration in range(self._hard_limit):
-            # Inject soft-limit notice into system message
+        for _ in range(self._hard_limit):
+            # Always work on a copy so the original messages list is never mutated
+            msgs = list(messages)
+            # Inject soft-limit notice into system message when approaching limit
             if tool_call_count >= self._soft_limit:
-                msgs = list(messages)
                 msgs[0] = {
                     "role": "system",
                     "content": system_content + _SOFT_LIMIT_NOTICE,
                 }
-            else:
-                msgs = messages
 
             tool_calls, final_content = self._llm.generate_with_tools(msgs, TOOL_DEFINITIONS)
 
@@ -165,6 +164,10 @@ class AgenticPipeline:
         return self._parse_final(final_content, evidence_map, steps_log)
 
     def _parse_final(self, content: str, evidence_map: dict, steps_log: list) -> GenerationResult:
+        if content is None:
+            logger.warning(
+                "generate_with_tools returned ([], None) — LLM gave no content; treating as empty answer"
+            )
         try:
             data = json.loads(content or "{}")
         except (json.JSONDecodeError, TypeError):

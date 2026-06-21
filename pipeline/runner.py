@@ -13,6 +13,7 @@ e.g.: `from layer_b.pipeline import process_document`
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional
 
 from layer_b.pipeline import process_document
@@ -144,6 +145,7 @@ class RAGPipeline:
         top_k: int = 5,
         prefetch_k: int = 20,
         rerank: bool = True,
+        llm_client=None,
     ):
         """Retrieve evidence then run the agentic loop with GPT-4.1 tool calling.
 
@@ -155,6 +157,9 @@ class RAGPipeline:
             Absolute path to the original PDF file (for on-demand screenshots).
         top_k, prefetch_k, rerank:
             Same as query().
+        llm_client:
+            Optional LLM client override. Defaults to GPT41Client() if None.
+            Useful for testing with a stub client.
 
         Returns
         -------
@@ -164,9 +169,9 @@ class RAGPipeline:
         ranked = self._retriever.search_text(
             query_text, top_k=top_k, prefetch_k=prefetch_k, rerank=rerank
         )
-        doc_stem = self._ingester.collection_name  # collection name doubles as doc stem
+        doc_stem = Path(pdf_path).stem  # use PDF filename stem, not collection name
         agentic = AgenticPipeline(
-            llm_client=GPT41Client(),
+            llm_client=llm_client or GPT41Client(),
             retriever=self._retriever,
             pdf_path=pdf_path,
             doc_stem=doc_stem,

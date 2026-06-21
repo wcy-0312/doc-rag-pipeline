@@ -111,13 +111,15 @@ class GPT41Client(LLMClient):
         return _parse_json_response(raw)
 
     def generate_with_tools(self, messages: list, tools: list) -> tuple:
-        response = self._client.chat.completions.create(
-            model=self._deployment,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            temperature=0.0,
-        )
+        kwargs = {
+            "model": self._deployment,
+            "messages": messages,
+            "temperature": 0.0,
+        }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        response = self._client.chat.completions.create(**kwargs)
         msg = response.choices[0].message
         if msg.tool_calls:
             tool_calls = [
