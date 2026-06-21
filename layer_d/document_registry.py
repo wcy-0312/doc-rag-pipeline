@@ -14,7 +14,14 @@ class DocumentRegistry:
         self._path = Path(registry_path)
         self._data: dict[str, dict] = {}
         if self._path.exists():
-            self._data = json.loads(self._path.read_text(encoding="utf-8"))
+            try:
+                self._data = json.loads(self._path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Registry file corrupted, starting fresh: %s", self._path
+                )
+                self._data = {}
 
     def register(self, doc_id: str, pdf_path: str, collection_name: str = "") -> None:
         """Add or update an entry and persist to disk immediately."""
@@ -23,10 +30,9 @@ class DocumentRegistry:
             "collection_name": collection_name,
         }
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
-            json.dumps(self._data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        tmp = self._path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.rename(self._path)
 
     def get_pdf_path(self, doc_id: str) -> str | None:
         """Return pdf_path for doc_id, or None if not registered."""

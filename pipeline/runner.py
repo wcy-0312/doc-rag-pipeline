@@ -66,7 +66,7 @@ class RAGPipeline:
         collection_name:
             Qdrant collection to use for this document set.
         llm_client:
-            LLM client implementing generate()/generate_multimodal().
+            LLM client implementing generate().
             Defaults to Gemma3Client (layer_e.llm_client) if None.
         abstention_threshold:
             Minimum rerank_score to answer; below this the pipeline abstains.

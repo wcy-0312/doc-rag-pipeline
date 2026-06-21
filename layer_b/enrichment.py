@@ -48,15 +48,16 @@ def _is_trivial_table(unit: RetrievalUnit) -> bool:
     return bool(values) and all(_DATE_ONLY_RE.match(v) for v in values)
 
 
+_FIGURE_PLACEHOLDER_RE = re.compile(r"^\[圖表[^\]]*\]\s*$")
+
+
 def _is_trivial_figure(unit: RetrievalUnit) -> bool:
     """Layer 1 pre-filter: True for figures with no useful text content."""
     text = unit.embedding_text.strip()
     if not text:
         return True
     # Fallback placeholder text — no elements were linked
-    if text.startswith("[圖表"):
-        return True
-    return False
+    return bool(_FIGURE_PLACEHOLDER_RE.match(text))
 
 
 def _build_prefix(result: dict) -> str:

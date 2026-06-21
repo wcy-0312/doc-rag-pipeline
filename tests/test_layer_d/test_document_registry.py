@@ -23,6 +23,18 @@ def test_persists_to_disk(tmp_path):
     assert data["doc_a"]["pdf_path"] == "/path/to/a.pdf"
 
 
+def test_corrupt_registry_starts_fresh(tmp_path):
+    """A corrupted registry file should be silently ignored and replaced on next write."""
+    path = tmp_path / "registry.json"
+    path.write_text("{not valid json}", encoding="utf-8")
+    reg = DocumentRegistry(path)
+    assert reg.get_pdf_path("anything") is None
+    # After a register(), the file should contain valid JSON
+    reg.register("doc_x", "/x.pdf")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["doc_x"]["pdf_path"] == "/x.pdf"
+
+
 def test_loads_existing_data(tmp_path):
     path = tmp_path / "registry.json"
     path.write_text(

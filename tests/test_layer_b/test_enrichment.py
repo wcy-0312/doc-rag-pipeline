@@ -1,7 +1,7 @@
 import pytest
 from dataclasses import dataclass, field
 from layer_b.models import RetrievalUnit
-from layer_b.enrichment import enrich_units, _is_trivial_table
+from layer_b.enrichment import enrich_units, _is_trivial_table, _is_trivial_figure
 
 
 # ── Stubs ──────────────────────────────────────────────────────────────────
@@ -139,6 +139,18 @@ def test_is_trivial_table_date_only():
     ]
     unit = _table_unit(rows=rows)
     assert _is_trivial_table(unit) is True
+
+
+def test_is_trivial_figure_pure_placeholder():
+    """A pure placeholder like [圖表 第3頁] should be treated as trivial."""
+    unit = _figure_unit(embedding_text="[圖表 第3頁]")
+    assert _is_trivial_figure(unit) is True
+
+
+def test_is_trivial_figure_with_page_context():
+    """A string starting with [圖表...] but containing extra content is NOT trivial."""
+    unit = _figure_unit(embedding_text="[圖表 第3頁] 實際內容...")
+    assert _is_trivial_figure(unit) is False
 
 
 def test_mixed_units_only_table_and_figure_enriched():
