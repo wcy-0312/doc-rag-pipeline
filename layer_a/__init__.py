@@ -10,8 +10,8 @@ def get_extractor(tool: str):
         from layer_a.azure_di_extractor import convert_image_azure_di
         return convert_image_azure_di
     elif tool == "docling":
-        from layer_a.docling_extractor import convert_pdf_docling
-        return convert_pdf_docling
+        from layer_a.docling_extractor import convert_word_docling
+        return convert_word_docling
     elif tool == "llm":
         from layer_a.llm_extractor import convert_pdf_llm
         return convert_pdf_llm
@@ -30,9 +30,6 @@ def get_extractor_for_file(path) -> str:
         ".pdf":  "azure_cu",
         ".docx": "docling",
         ".doc":  "docling",
-        ".xlsx": "docling",
-        ".xls":  "docling",
-        ".pptx": "docling",
         ".jpg":  "azure_di",
         ".jpeg": "azure_di",
         ".png":  "azure_di",
