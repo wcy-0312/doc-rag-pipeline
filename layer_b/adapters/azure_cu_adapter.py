@@ -1,7 +1,6 @@
 from __future__ import annotations
 import re as _re
-from typing import Any
-from layer_b.models import BoundingBox, IRCell, IRTable, QC
+from layer_b.models import IRCell, IRTable, QC
 
 _SOURCE_PAGE_RE = _re.compile(r'^D\((\d+),')
 
@@ -9,24 +8,6 @@ _SOURCE_PAGE_RE = _re.compile(r'^D\((\d+),')
 def _parse_source_page(source_str: str) -> int | None:
     m = _SOURCE_PAGE_RE.match(str(source_str or ""))
     return int(m.group(1)) if m else None
-
-
-def _parse_bounding_box(regions: list[dict]) -> BoundingBox | None:
-    if not regions:
-        return None
-    r = regions[0]
-    polygon = r.get("polygon", [])
-    if len(polygon) < 8:
-        return None
-    xs = polygon[0::2]
-    ys = polygon[1::2]
-    return BoundingBox(
-        page=r.get("pageNumber", 1),
-        x0=min(xs),
-        y0=min(ys),
-        x1=max(xs),
-        y1=max(ys),
-    )
 
 
 def _parse_confidence(cell: dict) -> float | None:
@@ -47,7 +28,6 @@ def _parse_cell(cell: dict) -> IRCell:
         is_col_header=is_col_header,
         header_source="flag",
         confidence=_parse_confidence(cell),
-        bounding_box=_parse_bounding_box(cell.get("boundingRegions", [])),
     )
 
 

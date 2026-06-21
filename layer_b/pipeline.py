@@ -5,7 +5,7 @@ from pathlib import Path as _Path
 from layer_b.adapters import adapt, get_source_tool
 from layer_b.normalizers.merger import merge_cross_page, expand_spans
 from layer_b.normalizers.header_path import build_header_paths
-from layer_b.formatters.formatter import linearize_kv, to_json, to_markdown, document_to_retrieval_units
+from layer_b.formatters.formatter import linearize_kv, to_json, to_markdown
 from layer_b.models import IRDocument, RetrievalUnit
 
 SHORT_DOC_THRESHOLD = 500
@@ -55,14 +55,6 @@ def _doc_prefix(raw: dict) -> str:
     file_name = raw.get("metadata", {}).get("file_name", "")
     stem = _Path(file_name).stem if file_name else ""
     return re.sub(r'[^\w\-]', '_', stem) if stem else "doc"
-
-_FLAG = {"high": "ok", "medium": "ok", "low": "low"}
-
-
-def _quality(level: str) -> tuple[str, float]:
-    """Map confidence level to (quality_flag, retrieval_weight). Kept for tests."""
-    _WEIGHT = {"high": 1.0, "medium": 0.7, "low": 0.4}
-    return _FLAG[level], _WEIGHT[level]
 
 
 def _continuous_weight(info_loss: float | None) -> float:

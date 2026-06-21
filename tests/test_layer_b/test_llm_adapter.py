@@ -2,7 +2,6 @@
 from layer_b.adapters import llm_adapter
 from layer_b.adapters import adapt as unified_adapt
 from layer_b.models import IRDocument, IRSection
-from layer_b.formatters.formatter import document_to_retrieval_units
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -131,23 +130,3 @@ def test_llm_adapt_via_unified():
     assert result[0].source_tool == "vision_llm"
 
 
-def test_document_to_retrieval_units():
-    """確認 retrieval unit 包含 entities 和 document_signals。"""
-    raw = _raw_with_sections()
-    doc = llm_adapter.adapt(raw)[0]
-    units = document_to_retrieval_units(doc)
-    # section s001 has 1 element; section s002 has 0
-    assert len(units) == 1
-    unit = units[0]
-    assert unit["retrieval_unit_id"] == "test_doc_001_s001_e001"
-    assert unit["source_tool"] == "vision_llm"
-    assert unit["doc_id"] == "test_doc_001"
-    assert unit["section_id"] == "s001"
-    assert unit["section_title"] == "疼痛管理"
-    assert unit["semantic_type"] == "procedure"
-    assert unit["page_no"] == 1
-    assert unit["reading_order"] == 1
-    assert unit["content"] == "給藥 PRN Q4H"
-    assert "medications" in unit["entities"]
-    assert len(unit["document_signals"]) == 1
-    assert unit["document_signals"][0]["signal_type"] == "dosage"

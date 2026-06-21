@@ -4,15 +4,6 @@ from typing import Optional
 
 
 @dataclass
-class BoundingBox:
-    page: int
-    x0: float
-    y0: float
-    x1: float
-    y1: float
-
-
-@dataclass
 class IRCell:
     row_index: int
     col_index: int
@@ -24,7 +15,6 @@ class IRCell:
     # "flag" = from tool, "heuristic" = inferred
     header_source: str = "flag"
     confidence: Optional[float] = None
-    bounding_box: Optional[BoundingBox] = None
 
 
 @dataclass

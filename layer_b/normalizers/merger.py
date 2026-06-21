@@ -35,7 +35,6 @@ def expand_spans(table: IRTable) -> IRTable:
                     is_col_header=cell.is_col_header,
                     header_source=cell.header_source,
                     confidence=cell.confidence,
-                    bounding_box=cell.bounding_box,
                 ))
 
     # Sort by (row_index, col_index) for predictable downstream ordering
@@ -131,7 +130,6 @@ def _merge(a: IRTable, b: IRTable) -> IRTable:
             is_col_header=False,
             header_source=c.header_source,
             confidence=c.confidence,
-            bounding_box=c.bounding_box,
         ))
 
     merged_pages = sorted(set(a.source_pages + b.source_pages))

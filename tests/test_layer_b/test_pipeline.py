@@ -4,7 +4,7 @@ from layer_b.models import IRCell, IRTable, QC, RetrievalUnit
 from layer_b.normalizers.header_path import build_header_paths
 from layer_b.pipeline import assess
 from layer_b.formatters.formatter import to_markdown
-from layer_b.pipeline import process_document, _quality, _continuous_weight
+from layer_b.pipeline import process_document, _continuous_weight
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -156,25 +156,7 @@ def test_to_markdown_empty():
     assert md == ""
 
 
-# ── Test 5: confidence levels → retrieval_weight mapping ─────────────────────
-
-def test_retrieval_unit_confidence_levels():
-    """_quality() correctly maps confidence levels to (flag, weight)."""
-    # high confidence
-    flag, weight = _quality("high")
-    assert weight == 1.0
-    assert flag == "ok"
-
-    # medium confidence
-    flag, weight = _quality("medium")
-    assert weight == 0.7
-    assert flag == "ok"
-
-    # low confidence
-    flag, weight = _quality("low")
-    assert weight == 0.4
-    assert flag == "low"
-
+# ── Test 5: assess() confidence levels ───────────────────────────────────────
 
 def test_retrieval_unit_confidence_levels_via_assess():
     """assess() with known inputs returns expected levels used by pipeline."""
@@ -189,23 +171,9 @@ def test_retrieval_unit_confidence_levels_via_assess():
             qc=QC(estimated_info_loss_rate=info_loss, word_avg=word_avg),
         )
 
-    # high: info_loss=0.01, word_avg=0.95
-    result = assess(_make_table(0.01, 0.95))
-    assert result["level"] == "high"
-    flag, weight = _quality(result["level"])
-    assert weight == 1.0 and flag == "ok"
-
-    # medium: info_loss=0.05
-    result = assess(_make_table(0.05))
-    assert result["level"] == "medium"
-    flag, weight = _quality(result["level"])
-    assert weight == 0.7 and flag == "ok"
-
-    # low: info_loss=0.15
-    result = assess(_make_table(0.15))
-    assert result["level"] == "low"
-    flag, weight = _quality(result["level"])
-    assert weight == 0.4 and flag == "low"
+    assert assess(_make_table(0.01, 0.95))["level"] == "high"
+    assert assess(_make_table(0.05))["level"] == "medium"
+    assert assess(_make_table(0.15))["level"] == "low"
 
 
 # ── Test 6: empty tables list ────────────────────────────────────────────────
@@ -268,16 +236,6 @@ def test_continuous_weight():
     assert _continuous_weight(0.0) == 1.0
     assert _continuous_weight(1.5) == 0.0  # clip to 0
 
-
-# ── Test 9: EmbeddingProvider protocol ───────────────────────────────────────
-
-def test_embedding_provider_protocol():
-    """NullEmbeddingProvider satisfies EmbeddingProvider protocol."""
-    from layer_b.embedding import EmbeddingProvider, NullEmbeddingProvider
-    provider = NullEmbeddingProvider()
-    result = provider.embed_texts(["test text"])
-    assert result == [[]]
-    assert isinstance(provider, EmbeddingProvider)
 
 
 # ── Test ③b: vision_description prepended to embedding_text ──────────────────

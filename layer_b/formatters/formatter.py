@@ -1,7 +1,6 @@
 from __future__ import annotations
 from collections import defaultdict
 from layer_b.normalizers.header_path import LabelledCell, LabelledTable
-from layer_b.models import IRDocument
 
 
 def _kv_key(col_header_path: list[str]) -> str:
@@ -180,37 +179,3 @@ def to_markdown(table: LabelledTable) -> str:
         lines.append(_row_to_md(groups[row_idx]))
 
     return "\n".join(lines)
-
-
-def document_to_retrieval_units(doc: IRDocument) -> list[dict]:
-    """將 IRDocument 的每個 element 轉為 retrieval unit。
-
-    每個 element 輸出一個 retrieval unit，包含：
-    - retrieval_unit_id
-    - source_tool
-    - doc_id
-    - section_id, section_title, semantic_type
-    - page_no, reading_order
-    - content（主要檢索文字）
-    - entities（從 element 提取）
-    - document_signals
-    """
-    units = []
-    for section in doc.sections:
-        for elem in section.elements:
-            unit = {
-                "retrieval_unit_id": f"{doc.doc_id}_{elem.get('element_id', '')}",
-                "source_tool": doc.source_tool,
-                "doc_id": doc.doc_id,
-                "section_id": section.section_id,
-                "section_title": section.title,
-                "semantic_type": section.semantic_type,
-                "page_no": elem.get("page_no"),
-                "reading_order": elem.get("reading_order"),
-                "element_type": elem.get("type", "text"),
-                "content": elem.get("content") or "",
-                "entities": elem.get("entities", {}),
-                "document_signals": elem.get("document_signals", []),
-            }
-            units.append(unit)
-    return units

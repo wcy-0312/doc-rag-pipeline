@@ -1,18 +1,5 @@
 from __future__ import annotations
-from typing import Any
-from layer_b.models import BoundingBox, IRCell, IRTable, QC
-
-
-def _parse_bounding_box(bbox: dict | None) -> BoundingBox | None:
-    if not bbox:
-        return None
-    return BoundingBox(
-        page=bbox.get("page_no", 1),
-        x0=bbox.get("l", 0.0),
-        y0=bbox.get("t", 0.0),
-        x1=bbox.get("r", 0.0),
-        y1=bbox.get("b", 0.0),
-    )
+from layer_b.models import IRCell, IRTable, QC
 
 
 def _parse_cell(cell: dict) -> IRCell:
@@ -28,7 +15,6 @@ def _parse_cell(cell: dict) -> IRCell:
         is_col_header=is_col_header,
         header_source="flag",
         confidence=None,
-        bounding_box=_parse_bounding_box(cell.get("bbox")),
     )
 
 

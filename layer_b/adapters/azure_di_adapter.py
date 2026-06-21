@@ -1,26 +1,5 @@
 from __future__ import annotations
-from layer_b.models import BoundingBox, IRCell, IRTable, QC
-
-
-_FALLBACK_WARNING = "AZURE_DI_FALLBACK_TO_DOCLING"
-
-
-def _parse_bounding_box(regions: list[dict]) -> BoundingBox | None:
-    if not regions:
-        return None
-    r = regions[0]
-    polygon = r.get("polygon", [])
-    if len(polygon) < 8:
-        return None
-    xs = polygon[0::2]
-    ys = polygon[1::2]
-    return BoundingBox(
-        page=r.get("pageNumber", 1),
-        x0=min(xs),
-        y0=min(ys),
-        x1=max(xs),
-        y1=max(ys),
-    )
+from layer_b.models import IRCell, IRTable, QC
 
 
 def _parse_cell(cell: dict) -> IRCell:
@@ -35,7 +14,6 @@ def _parse_cell(cell: dict) -> IRCell:
         is_col_header=False,
         header_source="heuristic",
         confidence=None,  # SDK confirmed: no per-cell confidence
-        bounding_box=_parse_bounding_box(cell.get("boundingRegions", [])),
     )
 
 
