@@ -308,6 +308,51 @@ def test_process_document_vision_description_prepended():
         )
 
 
+def _azure_cu_raw_with_figure() -> dict:
+    """Minimal Azure CU payload with one meaningful figure (flowchart-like)."""
+    return {
+        "extractor_metadata": {"tool": "azure_content_understanding"},
+        "metadata": {"qc": {"empty_cell_rate": 0.0, "qc_level": "ok", "warnings": []}},
+        "data": {
+            "tables": [],
+            "figures": [
+                {
+                    "id": "3.1",
+                    # D(page, x1,y1, x2,y2, x3,y3, x4,y4) — page 3, ~3×2 inch area
+                    "source": "D(3,1.0,1.0,4.0,1.0,4.0,3.0,1.0,3.0)",
+                    "elements": ["/paragraphs/0", "/paragraphs/1"],
+                },
+                {
+                    "id": "3.2",
+                    # tiny icon — area < 0.5
+                    "source": "D(3,0.1,0.1,0.3,0.1,0.3,0.2,0.1,0.2)",
+                    "elements": [],
+                },
+            ],
+            "paragraphs": [
+                {"content": "cT2N1M0 治療流程", "source": "D(3,1.0,1.0,4.0,1.5)"},
+                {"content": "新輔助化療建議", "source": "D(3,1.0,1.5,4.0,2.0)"},
+            ],
+            "page_images": {},
+        },
+    }
+
+
+def test_figure_path_azure_cu():
+    """_figure_path extracts figures for Azure CU using source coords + elements text."""
+    raw = _azure_cu_raw_with_figure()
+    units = process_document(raw)
+
+    fig_units = [u for u in units if u.structured_json.get("type") == "figure"]
+    assert len(fig_units) == 1, f"Expected 1 figure (tiny icon filtered), got {len(fig_units)}"
+
+    f = fig_units[0]
+    assert f.source_pages == [3]
+    assert "cT2N1M0 治療流程" in f.embedding_text
+    assert "新輔助化療建議" in f.embedding_text
+    assert f.structured_json["area"] > 0.5
+
+
 if __name__ == "__main__":
     test_process_document_table_path()
     test_process_document_vision_llm()

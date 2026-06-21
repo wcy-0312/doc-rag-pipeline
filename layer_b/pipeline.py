@@ -10,7 +10,29 @@ from layer_b.models import IRDocument, RetrievalUnit
 SHORT_DOC_THRESHOLD = 500
 
 _SOURCE_PAGE_RE = re.compile(r'^D\((\d+),')
+_FIGURE_COORDS_RE = re.compile(r'^D\((\d+),(.+)\)$')
 _VERSION_HISTORY_RE = re.compile(r'^\d{4}/\d{2}/\d{2}\s+Version\s+[\d.]+\s*$')
+
+
+def _parse_figure_area(source_str: str) -> tuple[int | None, float]:
+    """Parse Azure CU figure source string D(page, x1,y1,...) → (page, area).
+
+    Returns (None, 0.0) if source_str is missing or malformed.
+    Area is width × height in page units (inches for Azure CU).
+    """
+    m = _FIGURE_COORDS_RE.match(source_str or "")
+    if not m:
+        return None, 0.0
+    page = int(m.group(1))
+    try:
+        coords = [float(x) for x in m.group(2).split(",")]
+    except ValueError:
+        return page, 0.0
+    if len(coords) >= 8:
+        xs = coords[0::2]
+        ys = coords[1::2]
+        return page, (max(xs) - min(xs)) * (max(ys) - min(ys))
+    return page, 0.0
 
 
 def _parse_source_page(source_str: str) -> int | None:
@@ -645,9 +667,14 @@ def _build_page_context_map(data: dict, source_tool: str) -> dict:
 
 
 def _figure_path(raw: dict, source_tool: str, doc_prefix: str, doc_metadata: dict | None = None) -> list[RetrievalUnit]:
-    """Generate RetrievalUnit for each meaningful figure (has_image=True, area_sqin >= 0.5)."""
+    """Generate RetrievalUnit for each meaningful figure.
+
+    Meaningful = area >= 0.5 page units (filters tiny decorative icons).
+    embedding_text uses: caption > linked paragraph elements > page context fallback.
+    """
     data = raw.get("data", {})
     figures = data.get("figures", [])
+    paragraphs = data.get("paragraphs", [])
     confidence_level, quality_flag, retrieval_weight = _doc_confidence(raw)
     norm_tool = _normalize_source_tool(source_tool)
     page_context_map = _build_page_context_map(data, norm_tool)
@@ -655,26 +682,40 @@ def _figure_path(raw: dict, source_tool: str, doc_prefix: str, doc_metadata: dic
     units = []
     seq = 0
     for fig in figures:
-        if not fig.get("has_image") or fig.get("area_sqin", 0.0) < 0.5:
+        page, area = _parse_figure_area(fig.get("source", ""))
+        if page is None or area < 0.5:
             continue
-
-        page = _parse_source_page(fig.get("source", ""))
 
         cap_raw = fig.get("caption") or {}
         caption_text = (cap_raw.get("content", "") if isinstance(cap_raw, dict) else "").strip()
 
+        elem_texts = []
+        for elem_ref in fig.get("elements", []):
+            try:
+                idx = int(elem_ref.split("/")[-1])
+                content = paragraphs[idx].get("content", "").strip()
+                if len(content) >= 3:
+                    elem_texts.append(content)
+            except (IndexError, ValueError, KeyError):
+                pass
+        elem_text = " ".join(elem_texts[:15])[:400]
+
         if caption_text:
             embedding_text = caption_text
-        elif page is not None and page_context_map.get(page):
+        elif elem_text:
+            embedding_text = elem_text
+        elif page_context_map.get(page):
             embedding_text = f"[圖表 第{page}頁] {page_context_map[page]}"
         else:
-            embedding_text = f"[圖表 第{page}頁]" if page else "[圖表]"
+            embedding_text = f"[圖表 第{page}頁]"
 
-        unit_id = f"{doc_prefix}_f_{seq:03d}" if doc_prefix else f"f_{seq:03d}"
-        display = f"![figure]({fig.get('path', '')})"
+        display = f"[圖表 第{page}頁]"
         if caption_text:
             display += f"\n\n{caption_text}"
+        elif elem_text:
+            display += f"\n\n{elem_text[:200]}"
 
+        unit_id = f"{doc_prefix}_f_{seq:03d}" if doc_prefix else f"f_{seq:03d}"
         units.append(RetrievalUnit(
             retrieval_unit_id=unit_id,
             source_tool=norm_tool,
@@ -683,14 +724,13 @@ def _figure_path(raw: dict, source_tool: str, doc_prefix: str, doc_metadata: dic
                 "type": "figure",
                 "page": page,
                 "caption": caption_text,
-                "path": fig.get("path"),
-                "area_sqin": fig.get("area_sqin"),
+                "area": round(area, 4),
             },
             display_markdown=display,
             confidence_level=confidence_level,
             quality_flag=quality_flag,
             retrieval_weight=retrieval_weight,
-            source_pages=[page] if page is not None else [],
+            source_pages=[page],
             row_texts=[],
             doc_metadata=doc_metadata or {},
         ))
