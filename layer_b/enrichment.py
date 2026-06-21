@@ -33,6 +33,15 @@ _FIGURE_SYSTEM = (
     "只輸出 JSON，不要其他說明。"
 )
 
+_PARAGRAPH_SYSTEM = (
+    "你是醫療知識庫整理員。請判斷以下段落是否有明確限定「適用對象或情境」"
+    "（如特定癌別亞型、特定治療史、特定分期、特定手術類型等）。\n"
+    "若無限定（適用一般病人），只輸出 {\"has_restriction\": false}\n"
+    "若有限定，輸出 JSON：\n"
+    "{\"has_restriction\": true, \"applicability\": \"限定對象或情境（20字以內）\"}\n"
+    "只輸出 JSON，不要其他說明。"
+)
+
 
 def _is_trivial_table(unit: RetrievalUnit) -> bool:
     """Layer 1 pre-filter: True for structurally trivial tables that need no enrichment."""
@@ -76,7 +85,7 @@ def _call_llm(llm_client: Any, system: str, user: str) -> dict | None:
         response = llm_client.generate(system=system, user=user)
         # generate() returns a dict (already parsed by _parse_json_response).
         # If the LLM followed the enrichment prompt, it contains "meaningful".
-        if isinstance(response, dict) and "meaningful" in response:
+        if isinstance(response, dict) and ("meaningful" in response or "has_restriction" in response):
             return response
         # Fallback: try parsing the "answer" key if present (should not happen with
         # a compliant LLM, but defensive against prompt drift)
@@ -97,17 +106,19 @@ def enrich_units(
     units: list[RetrievalUnit],
     llm_client: Any,
 ) -> list[RetrievalUnit]:
-    """Apply LLM semantic enrichment to table and figure units.
+    """Apply LLM semantic enrichment to table, figure, and paragraph units.
 
-    Table and figure units that pass the Layer 1 structural pre-filter are sent
-    to the LLM with a domain-specific prompt. If meaningful=true, a semantic
-    prefix (摘要/適用/可解答) is prepended to embedding_text. Paragraph units
-    and trivial tables/figures are returned unchanged.
+    - Tables/figures: LLM judges meaningfulness and generates 摘要/適用/可解答 prefix.
+    - Paragraphs: LLM detects explicit patient/context restrictions and prepends [適用].
+      This improves retrieval precision: a DCIS-specific paragraph gets
+      "[適用] DCIS患者" in its embedding_text, reducing cosine similarity with
+      queries about non-DCIS patients without any rule-based filtering.
+
+    Fail-open: on LLM error, the unit is returned unchanged.
 
     Args:
         units: Output of process_document().
         llm_client: Any object with .generate(system, user) -> dict.
-                    Uses GPT41Client or any LLMClient subclass in practice.
     """
     from dataclasses import replace
 
@@ -126,6 +137,12 @@ def enrich_units(
                 enrichment = _call_llm(llm_client, _FIGURE_SYSTEM, unit.embedding_text[:600])
                 if enrichment and enrichment.get("meaningful"):
                     unit = replace(unit, embedding_text=_build_prefix(enrichment) + unit.embedding_text)
+
+        elif unit_type == "paragraph":
+            enrichment = _call_llm(llm_client, _PARAGRAPH_SYSTEM, unit.embedding_text[:400])
+            if enrichment and enrichment.get("has_restriction") and enrichment.get("applicability"):
+                prefix = f"[適用] {enrichment['applicability']}\n"
+                unit = replace(unit, embedding_text=prefix + unit.embedding_text)
 
         result.append(unit)
     return result
