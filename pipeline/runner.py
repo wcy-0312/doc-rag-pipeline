@@ -18,6 +18,7 @@ from typing import List, Optional
 
 from layer_b.pipeline import process_document
 from layer_c.pipeline import process_and_embed
+from layer_d.document_registry import DocumentRegistry
 from layer_d.ingestion import DocumentIngester
 from layer_d.reranker import BGEReranker
 from layer_d.retrieval import HybridRetriever
@@ -52,6 +53,7 @@ class RAGPipeline:
         llm_client=None,
         abstention_threshold: float = 0.10,
         reranker=None,
+        registry_path: str | None = None,
     ):
         """
         Parameters
@@ -87,16 +89,27 @@ class RAGPipeline:
             llm_client=llm_client,
             abstention_threshold=abstention_threshold,
         )
+        self._registry = DocumentRegistry(registry_path) if registry_path else None
 
     # ── Ingestion (A + B + C + D) ─────────────────────────────────────────
 
-    def ingest(self, raw_document: dict) -> int:
+    def ingest(
+        self,
+        raw_document: dict,
+        pdf_path: str | None = None,
+        doc_id: str | None = None,
+    ) -> int:
         """Structure, embed, and index one document.
 
         Parameters
         ----------
         raw_document:
             Output from a layer_a extractor (azure_cu, azure_di, docling, llm).
+        pdf_path:
+            Optional path to the original PDF file. Used to populate the registry.
+        doc_id:
+            Optional document identifier (e.g. PDF filename stem). Used as the
+            registry key. Both pdf_path and doc_id must be provided for registration.
 
         Returns
         -------
@@ -106,7 +119,12 @@ class RAGPipeline:
         units = process_document(raw_document)           # B: → list[RetrievalUnit]
         chunks = process_and_embed(units, self._provider) # C: → list[EmbeddedChunk]
         self._ingester.create_collection_if_not_exists()
-        return self._ingester.ingest(chunks)              # D: → Qdrant
+        n = self._ingester.ingest(chunks)                 # D: → Qdrant
+        if self._registry is not None and pdf_path and doc_id:
+            self._registry.register(
+                doc_id, pdf_path, self._ingester.collection_name
+            )
+        return n
 
     # ── Query (D + E) ─────────────────────────────────────────────────────
 
