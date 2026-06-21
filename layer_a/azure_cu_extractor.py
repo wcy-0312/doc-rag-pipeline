@@ -127,7 +127,7 @@ def _page_image_refs(
     4. 頁面有嵌入圖 >= 2.0 sqin（fitz get_image_info()）
     5. 頁面在 checkbox_pages 中（有偵測到 checkbox）
 
-    Returns: {page_no: {"pdf_path": str, "page_no": int, "has_image": bool}}
+    Returns: {page_no: {"source_path": str, "source_type": "pdf", "page_no": int, "has_image": bool}}
     """
     import fitz
 
@@ -153,6 +153,13 @@ def _page_image_refs(
     if checkbox_pages:
         visual_pages.update(checkbox_pages)
 
+    def _ref(pn: int) -> dict:
+        return {"source_path": str(pdf_path), "source_type": "pdf", "page_no": pn, "has_image": True}
+
+    # Trigger 3 fills all pages — skip fitz scan entirely
+    if page_count > 0 and len(visual_pages) >= page_count:
+        return {pn: _ref(pn) for pn in range(1, page_count + 1)}
+
     doc = fitz.open(str(pdf_path))
     try:
         # Trigger 4: pages with large embedded images not captured by CU API figures[]
@@ -176,10 +183,7 @@ def _page_image_refs(
     finally:
         doc.close()
 
-    return {
-        page_no: {"pdf_path": str(pdf_path), "page_no": page_no, "has_image": True}
-        for page_no in sorted(visual_pages)
-    }
+    return {pn: _ref(pn) for pn in sorted(visual_pages)}
 
 
 def _detect_checkbox_states(doc, page_no: int) -> list[dict]:

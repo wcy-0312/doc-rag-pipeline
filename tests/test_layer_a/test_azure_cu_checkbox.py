@@ -114,5 +114,6 @@ def test_page_image_refs_embedded_image_trigger(tmp_path):
     # Page 1 should be detected due to embedded image trigger
     assert 1 in result
     assert result[1]["has_image"] is True
-    assert result[1]["pdf_path"] == str(pdf_path)
+    assert result[1]["source_path"] == str(pdf_path)
+    assert result[1]["source_type"] == "pdf"
     assert result[1]["page_no"] == 1

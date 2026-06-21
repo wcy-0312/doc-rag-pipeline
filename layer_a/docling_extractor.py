@@ -311,18 +311,19 @@ def convert_pdf_docling(
             for prov in pic.get("prov", [])
             if prov.get("page_no")
         }
-        # 無文字的頁（掃描頁）
-        qc_tmp = _compute_qc(raw, page_count, pictures, output_dir is not None)
-        no_item_pages = set(qc_tmp.get("pages_no_extracted_items", []))
+        # 無文字的頁（掃描頁）— qc 在此計算一次，line 336 直接重用
+        qc = _compute_qc(raw, page_count, pictures, output_dir is not None)
+        no_item_pages = set(qc.get("pages_no_extracted_items", []))
         for pn in sorted(pic_pages | no_item_pages):
-            page_images[pn] = {"pdf_path": str(pdf_path), "page_no": pn, "has_image": True}
+            page_images[pn] = {"source_path": str(pdf_path), "source_type": "pdf", "page_no": pn, "has_image": True}
     elif is_office:
-        # DOCX/PPTX：記錄有圖片的頁碼，不做 LibreOffice 轉換
+        # DOCX/PPTX：記錄有圖片的頁碼；has_image=False 因 Layer E 尚未支援渲染
+        qc = None  # 由下面 _compute_qc 計算
         for pic in pictures_raw:
             for prov in pic.get("prov", []):
                 pn = prov.get("page_no")
                 if pn:
-                    page_images[pn] = {"docx_path": str(pdf_path), "page_no": pn, "has_image": True}
+                    page_images[pn] = {"source_path": str(pdf_path), "source_type": "docx", "page_no": pn, "has_image": False}
 
     # 4. metadata
     metadata = build_metadata(
@@ -333,7 +334,9 @@ def convert_pdf_docling(
     )
 
     # 5. 組合 schema-v3.0 output（metadata + data 兩層）
-    qc = _compute_qc(raw, page_count, pictures, output_dir is not None)
+    # PDF path: qc already computed above when building page_images
+    if qc is None:
+        qc = _compute_qc(raw, page_count, pictures, output_dir is not None)
 
     # 掃描型 PDF 偵測：所有頁面都沒有萃取出文字，且是 PDF
     if is_pdf and qc.get("pages_no_extracted_items"):

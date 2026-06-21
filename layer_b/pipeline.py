@@ -767,19 +767,15 @@ def _high_graphics_path(
         if page in pages_with_figures:
             continue  # 已由 _figure_path 處理
 
-        # 支援新格式 {pdf_path/image_path/docx_path, page_no, has_image} 及舊格式 str
+        # 支援新格式 {source_path, source_type, page_no, has_image} 及舊格式 str
         if isinstance(img_info, dict):
             if not img_info.get("has_image"):
                 continue
-            pdf_path  = img_info.get("pdf_path", "")
-            image_path = img_info.get("image_path", "")
-            docx_path  = img_info.get("docx_path", "")
-            display_ref = pdf_path or image_path or docx_path
+            source_path = img_info.get("source_path", "")
+            source_type = img_info.get("source_type", "pdf")
         elif isinstance(img_info, str):
-            pdf_path = img_info
-            image_path = ""
-            docx_path = ""
-            display_ref = img_info
+            source_path = img_info
+            source_type = "pdf"
         else:
             continue
 
@@ -794,14 +790,14 @@ def _high_graphics_path(
             source_tool=norm_tool,
             embedding_text=embedding_text,
             structured_json={
-                "type":       "document",
-                "label":      "high_graphics",
-                "page":       page,
-                "content":    embedding_text,
-                "pdf_path":   pdf_path,
-                "image_path": image_path,
+                "type":        "document",
+                "label":       "high_graphics",
+                "page":        page,
+                "content":     embedding_text,
+                "source_path": source_path,
+                "source_type": source_type,
             },
-            display_markdown=f"[page_{page}]({display_ref})" if display_ref else "",
+            display_markdown=f"[page_{page}]({source_path})" if source_path else "",
             confidence_level=confidence_level,
             quality_flag=quality_flag,
             retrieval_weight=retrieval_weight * 0.9,  # 輕微降權，因無直接文字

@@ -377,7 +377,7 @@ def convert_image_azure_di(
 
     # ── 5. page_images：記錄原始圖片路徑參考（不複製）────────────────────
     page_images: dict[int, dict] = {
-        1: {"image_path": str(img_path), "page_no": 1, "has_image": True}
+        1: {"source_path": str(img_path), "source_type": "image", "page_no": 1, "has_image": True}
     }
 
     # ── 6. QC 量化 ───────────────────────────────────────────────────────
