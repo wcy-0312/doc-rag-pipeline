@@ -19,6 +19,11 @@ class LLMClient(abc.ABC):
     def generate(self, system: str, user: str) -> dict:
         ...
 
+    @abc.abstractmethod
+    def generate_text(self, user: str, system: str = "") -> str:
+        """Plain text generation without JSON parsing."""
+        ...
+
     def generate_multimodal(self, messages: list) -> dict:
         """Default: extract text from messages and fallback to generate()."""
         system = next((m["content"] for m in messages if m["role"] == "system"), "")
@@ -61,6 +66,9 @@ class _StubLLMClient(LLMClient):
         })
         return ([], content)
 
+    def generate_text(self, user: str, system: str = "") -> str:
+        return "stub summary"
+
 
 class Gemma3Client(LLMClient):
     def __init__(self):
@@ -81,6 +89,18 @@ class Gemma3Client(LLMClient):
         )
         raw = response.choices[0].message.content
         return _parse_json_response(raw)
+
+    def generate_text(self, user: str, system: str = "") -> str:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user})
+        response = self._client.chat.completions.create(
+            model="/model",
+            messages=messages,
+            temperature=0.0,
+        )
+        return (response.choices[0].message.content or "").strip()
 
 
 class GPT41Client(LLMClient):
@@ -134,6 +154,14 @@ class GPT41Client(LLMClient):
             return (tool_calls, None)
         return ([], msg.content)
 
+    def generate_text(self, user: str, system: str = "") -> str:
+        _, text = self.generate_with_tools(
+            ([{"role": "system", "content": system}] if system else [])
+            + [{"role": "user", "content": user}],
+            [],
+        )
+        return (text or "").strip()
+
 
 class Gemma4Client(LLMClient):
     def __init__(self):
@@ -154,6 +182,18 @@ class Gemma4Client(LLMClient):
         )
         raw = response.choices[0].message.content
         return _parse_json_response(raw)
+
+    def generate_text(self, user: str, system: str = "") -> str:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user})
+        response = self._client.chat.completions.create(
+            model="/model",
+            messages=messages,
+            temperature=0.0,
+        )
+        return (response.choices[0].message.content or "").strip()
 
 
 def get_llm_client() -> LLMClient:
