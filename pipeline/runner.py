@@ -13,10 +13,11 @@ e.g.: `from layer_b.pipeline import process_document`
 """
 from __future__ import annotations
 
+import re as _re
 from pathlib import Path
 from typing import List, Optional
 
-from layer_b.pipeline import process_document
+from layer_b.pipeline import process_document, extract_document_index
 from layer_c.pipeline import process_and_embed
 from layer_d.document_registry import DocumentRegistry
 from layer_d.ingestion import DocumentIngester
@@ -120,6 +121,11 @@ class RAGPipeline:
         chunks = process_and_embed(units, self._provider) # C: → list[EmbeddedChunk]
         self._ingester.create_collection_if_not_exists()
         n = self._ingester.ingest(chunks)                 # D: → Qdrant
+        doc_index = extract_document_index(raw_document)
+        if doc_index is not None:
+            _stem = Path(raw_document.get("metadata", {}).get("file_name", "")).stem
+            _doc_stem = _re.sub(r'[^\w\-]', '_', _stem) if _stem else "doc"
+            self._ingester.store_document_index(_doc_stem, doc_index)
         if self._registry is not None and pdf_path and doc_id:
             self._registry.register(
                 doc_id, pdf_path, self._ingester.collection_name
@@ -187,7 +193,8 @@ class RAGPipeline:
         ranked = self._retriever.search_text(
             query_text, top_k=top_k, prefetch_k=prefetch_k, rerank=rerank
         )
-        doc_stem = Path(pdf_path).stem  # use PDF filename stem, not collection name
+        _raw_stem = Path(pdf_path).stem
+        doc_stem = _re.sub(r'[^\w\-]', '_', _raw_stem) if _raw_stem else "doc"
         agentic = AgenticPipeline(
             llm_client=llm_client or GPT41Client(),
             retriever=self._retriever,
