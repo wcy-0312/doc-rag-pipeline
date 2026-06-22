@@ -96,6 +96,76 @@ def _build_section_path_map(sections: list[dict]) -> dict[int, list[str]]:
     return result
 
 
+def extract_document_index(raw: dict) -> dict | None:
+    """Build a compact Table-of-Contents dict from sections[] tree.
+
+    Returns None if sections[] is absent or has no titled sections.
+    The returned dict is stored in Qdrant by DocumentIngester.store_document_index()
+    and retrieved by HybridRetriever.get_document_index() for the agentic loop.
+
+    Output shape:
+        {"sections": [{"title": "...", "sections": [...optional children...]}, ...]}
+    """
+    sections = raw.get("data", {}).get("sections", [])
+    if not sections:
+        return None
+
+    section_by_idx: dict[int, dict] = {i: s for i, s in enumerate(sections)}
+
+    def _node(sec_idx: int) -> dict | None:
+        sec = section_by_idx.get(sec_idx)
+        if sec is None:
+            return None
+        title = (sec.get("title") or "").strip()
+        children = []
+        for elem_ref in sec.get("elements", []):
+            try:
+                parts = str(elem_ref).strip("/").split("/")
+                if parts[-2] == "sections":
+                    child = _node(int(parts[-1]))
+                    if child is not None:
+                        children.append(child)
+            except (IndexError, ValueError):
+                pass
+        # Skip nodes with no title AND no children (structural noise)
+        if not title and not children:
+            return None
+        node: dict = {}
+        if title:
+            node["title"] = title
+        if children:
+            node["sections"] = children
+        return node
+
+    child_indices: set[int] = set()
+    for sec in sections:
+        for elem_ref in sec.get("elements", []):
+            try:
+                parts = str(elem_ref).strip("/").split("/")
+                if parts[-2] == "sections":
+                    child_indices.add(int(parts[-1]))
+            except (IndexError, ValueError):
+                pass
+
+    raw_roots = [
+        node
+        for i in range(len(sections))
+        if i not in child_indices
+        for node in [_node(i)]
+        if node is not None
+    ]
+
+    # If a root has no title (structural wrapper), promote its children to top level
+    roots = []
+    for node in raw_roots:
+        if "title" not in node and "sections" in node:
+            roots.extend(node["sections"])
+        else:
+            roots.append(node)
+
+    return {"sections": roots} if roots else None
+
+
 def _parse_source_page(source_str: str) -> int | None:
     m = _SOURCE_PAGE_RE.match(str(source_str or ""))
     return int(m.group(1)) if m else None

@@ -36,6 +36,21 @@ _SOFT_LIMIT_NOTICE = (
 _UNSUPPORTED_MARKER = "unsupported"
 
 
+def _format_document_index(index: dict) -> str:
+    """Format document_index dict as indented text for the system prompt."""
+    lines: list[str] = []
+
+    def _render(sections: list, depth: int) -> None:
+        for sec in sections:
+            title = sec.get("title", "")
+            if title:
+                lines.append("  " * depth + title)
+            _render(sec.get("sections", []), depth + 1)
+
+    _render(index.get("sections", []), 0)
+    return "\n".join(lines)
+
+
 class AgenticPipeline:
     def __init__(
         self,
@@ -54,6 +69,17 @@ class AgenticPipeline:
         self._soft_limit = soft_limit
         self._hard_limit = hard_limit
         self._abstention_threshold = abstention_threshold
+
+        # Load document index for pre-query navigation
+        document_index = None
+        if hasattr(retriever, "get_document_index"):
+            try:
+                document_index = retriever.get_document_index(doc_stem)
+            except Exception:
+                pass
+        self._document_outline: str | None = (
+            _format_document_index(document_index) if document_index else None
+        )
 
     def run(self, query: str, ranked_results: list) -> GenerationResult:
         # Guardrail: abstain if evidence is insufficient
@@ -75,6 +101,11 @@ class AgenticPipeline:
         evidence_list, evidence_map = context_packer.pack(ranked_results)
         evidence_block = format_evidence_block(evidence_list)
         system_content = _SYSTEM_TEMPLATE.format(evidence_block=evidence_block)
+        if self._document_outline:
+            system_content += (
+                "\n\n文件結構概覽（可輔助決定 retrieve_more 應搜尋哪個章節）：\n"
+                + self._document_outline
+            )
 
         messages = [
             {"role": "system", "content": system_content},

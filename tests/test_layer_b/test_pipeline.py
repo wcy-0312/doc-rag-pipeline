@@ -4,7 +4,7 @@ from layer_b.models import IRCell, IRTable, QC, RetrievalUnit
 from layer_b.table import build_header_paths, to_markdown
 from layer_b.pipeline import assess
 from layer_b.pipeline import process_document, _continuous_weight, _doc_confidence
-from layer_b.pipeline import _build_section_path_map, _extract_azure_cu_paragraphs
+from layer_b.pipeline import _build_section_path_map, _extract_azure_cu_paragraphs, extract_document_index
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -413,6 +413,52 @@ def test_extract_azure_cu_paragraphs_uses_section_map():
     section_path_map = {0: ["第三章 治療", "3.1 一線化療"]}
     candidates = _extract_azure_cu_paragraphs(data, section_path_map=section_path_map)
     assert candidates[0]["heading_breadcrumb"] == "第三章 治療 > 3.1 一線化療"
+
+
+
+# ── Test: extract_document_index (Task 4) ────────────────────────────────────
+
+def test_extract_document_index_flat():
+    raw = {
+        "data": {
+            "sections": [
+                {"title": "第一章 流行病學", "elements": ["/paragraphs/0"]},
+                {"title": "第二章 治療", "elements": ["/paragraphs/1"]},
+            ]
+        }
+    }
+    idx = extract_document_index(raw)
+    assert idx is not None
+    titles = [s["title"] for s in idx["sections"]]
+    assert "第一章 流行病學" in titles
+    assert "第二章 治療" in titles
+
+
+def test_extract_document_index_nested():
+    raw = {
+        "data": {
+            "sections": [
+                {"title": "", "elements": ["/sections/1", "/sections/2"]},
+                {"title": "第三章 治療", "elements": ["/sections/3"]},
+                {"title": "第一章", "elements": ["/paragraphs/5"]},
+                {"title": "3.1 一線化療", "elements": ["/paragraphs/12"]},
+            ]
+        }
+    }
+    idx = extract_document_index(raw)
+    assert idx is not None
+    # Top-level should be 第三章 and 第一章 (children of the empty root)
+    root_titles = [s.get("title", "") for s in idx["sections"]]
+    assert "第三章 治療" in root_titles
+    # 3.1 一線化療 should be nested under 第三章 治療
+    ch3 = next(s for s in idx["sections"] if s.get("title") == "第三章 治療")
+    assert "sections" in ch3
+    assert ch3["sections"][0]["title"] == "3.1 一線化療"
+
+
+def test_extract_document_index_no_sections():
+    assert extract_document_index({"data": {}}) is None
+    assert extract_document_index({"data": {"sections": []}}) is None
 
 
 if __name__ == "__main__":

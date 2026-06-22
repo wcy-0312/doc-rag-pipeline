@@ -350,3 +350,25 @@ class TestPageImageRefsAndPatientId:
         calls = client.create_payload_index.call_args_list
         indexed_fields = {c.kwargs["field_name"] for c in calls}
         assert "patient_id" in indexed_fields
+
+
+# ---------------------------------------------------------------------------
+# store_document_index (Task 4)
+# ---------------------------------------------------------------------------
+
+def test_store_document_index():
+    """store_document_index upserts a point with chunk_type=document_index."""
+    mock_qdrant_client = _mock_qdrant_client()
+    ingester = DocumentIngester(client=mock_qdrant_client)
+    index = {"sections": [{"title": "第一章"}]}
+    ingester.store_document_index("my_doc", index)
+
+    calls = mock_qdrant_client.upsert.call_args_list
+    assert len(calls) == 1
+    points = calls[0].kwargs["points"]
+    assert len(points) == 1
+    payload = points[0].payload
+    assert payload["chunk_type"] == "document_index"
+    assert payload["retrieval_weight"] == 0.0
+    assert payload["chunk_id"] == "my_doc__document_index"
+    assert payload["document_index"] == index

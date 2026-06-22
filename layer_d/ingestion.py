@@ -137,3 +137,28 @@ class DocumentIngester:
             total += len(points)
 
         return total
+
+    def store_document_index(self, doc_stem: str, document_index: dict) -> None:
+        """Store a compact document ToC as a special Qdrant point.
+
+        retrieval_weight=0.0 keeps it invisible to all normal searches
+        (search filter requires >=0.3). Retrieve it with
+        HybridRetriever.get_document_index(doc_stem).
+        """
+        chunk_id = f"{doc_stem}__document_index"
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points=[PointStruct(
+                id=_chunk_id_to_point_id(chunk_id),
+                vector={
+                    "dense": [0.0] * 1024,
+                    "sparse": SparseVector(indices=[], values=[]),
+                },
+                payload={
+                    "chunk_id":         chunk_id,
+                    "chunk_type":       "document_index",
+                    "retrieval_weight": 0.0,
+                    "document_index":   document_index,
+                },
+            )],
+        )

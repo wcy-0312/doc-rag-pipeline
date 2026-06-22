@@ -12,6 +12,7 @@ from qdrant_client.models import (
     FusionQuery,
     MatchAny,
     MatchText,
+    MatchValue,
     Prefetch,
     Range,
     SparseVector,
@@ -102,6 +103,22 @@ class HybridRetriever:
                 )
             ]
         )
+
+    def get_document_index(self, doc_stem: str) -> dict | None:
+        """Return the stored document_index for doc_stem, or None if absent."""
+        results, _ = self.client.scroll(
+            collection_name=self.collection_name,
+            scroll_filter=Filter(must=[
+                FieldCondition(key="chunk_type", match=MatchValue(value="document_index")),
+                FieldCondition(key="chunk_id", match=MatchText(text=f"{doc_stem}__")),
+            ]),
+            limit=1,
+            with_payload=True,
+            with_vectors=False,
+        )
+        if not results:
+            return None
+        return results[0].payload.get("document_index")
 
     def search(
         self,

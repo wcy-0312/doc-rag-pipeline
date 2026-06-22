@@ -163,3 +163,40 @@ def test_rag_pipeline_query_agentic_returns_result(tmp_path):
 
     assert result.answer == "agentic answer"
     assert len(result.steps_log) == 1
+
+
+# ── document_index / outline tests (Task 4) ───────────────────────────────────
+
+def test_document_outline_appears_in_system_prompt():
+    """When retriever returns a document_index, system prompt includes the outline."""
+    mock_llm = MagicMock()
+    mock_retriever = MagicMock()
+    mock_retriever.get_document_index.return_value = {
+        "sections": [
+            {"title": "第一章 流行病學"},
+            {"title": "第三章 治療", "sections": [{"title": "3.1 一線化療"}]},
+        ]
+    }
+    pipeline = AgenticPipeline(
+        llm_client=mock_llm,
+        retriever=mock_retriever,
+        pdf_path="/tmp/test.pdf",
+        doc_stem="test_doc",
+    )
+    assert pipeline._document_outline is not None
+    assert "第一章 流行病學" in pipeline._document_outline
+    assert "3.1 一線化療" in pipeline._document_outline
+
+
+def test_no_document_outline_when_retriever_returns_none():
+    """When retriever returns None, _document_outline is None and prompt is unaffected."""
+    mock_llm = MagicMock()
+    mock_retriever = MagicMock()
+    mock_retriever.get_document_index.return_value = None
+    pipeline = AgenticPipeline(
+        llm_client=mock_llm,
+        retriever=mock_retriever,
+        pdf_path="/tmp/test.pdf",
+        doc_stem="test_doc",
+    )
+    assert pipeline._document_outline is None
