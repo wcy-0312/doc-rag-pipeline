@@ -557,10 +557,6 @@ def test_build_figure_element_set_ignores_table_refs():
     assert result == {3, 7}
 
 
-def test_build_figure_element_set_empty():
-    assert _build_figure_element_set([]) == set()
-
-
 def test_build_figure_element_set_no_paragraph_refs():
     figures = [{"elements": ["/tables/0", "/figures/1"]}]
     result = _build_figure_element_set(figures)

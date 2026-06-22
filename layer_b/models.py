@@ -68,7 +68,7 @@ class RetrievalUnit:
     # Quality 欄位
     confidence_level: str    # "high" | "medium" | "low"
     quality_flag: str        # "ok" | "degraded" | "low"
-    retrieval_weight: float  # continuous: 1.0 - estimated_info_loss_rate; null → 0.7
+    retrieval_weight: float  # always 1.0 for structured paths; 0.7 for vision_llm (legacy)
 
     # Metadata
     source_pages: list[int] = field(default_factory=list)
