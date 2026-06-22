@@ -53,17 +53,40 @@ def _build_figure_element_set(figures: list[dict]) -> set[int]:
     return indices
 
 
-def _build_section_path_map(sections: list[dict]) -> dict[int, list[str]]:
+def _build_section_path_map(
+    sections: list[dict],
+    paragraphs: list[dict] | None = None,
+) -> dict[int, list[str]]:
     """Build {paragraph_index: [title, subtitle, ...]} from sections[] tree.
 
     Traverses the tree recursively. A paragraph's breadcrumb is the ordered
     list of non-empty section titles from the nearest root down to the section
     that directly references it. If a paragraph appears in multiple sections
     the first encounter wins.
+
+    Azure CU sections[] have no title field; titles come from the first
+    sectionHeading paragraph in each section's elements[]. The paragraphs
+    argument enables this fallback.
     """
     section_by_idx: dict[int, dict] = {i: s for i, s in enumerate(sections)}
+    paras: list[dict] = paragraphs or []
     result: dict[int, list[str]] = {}
     visited: set[int] = set()
+
+    def _section_title(sec: dict) -> str:
+        title = (sec.get("title") or "").strip()
+        if title:
+            return title
+        for elem_ref in sec.get("elements", []):
+            try:
+                parts = str(elem_ref).strip("/").split("/")
+                if parts[-2] == "paragraphs":
+                    pidx = int(parts[-1])
+                    if pidx < len(paras) and paras[pidx].get("role") == "sectionHeading":
+                        return (paras[pidx].get("content") or "").strip()
+            except (IndexError, ValueError):
+                pass
+        return ""
 
     def _visit(sec_idx: int, path: list[str]) -> None:
         if sec_idx in visited:
@@ -72,7 +95,7 @@ def _build_section_path_map(sections: list[dict]) -> dict[int, list[str]]:
         sec = section_by_idx.get(sec_idx)
         if sec is None:
             return
-        title = (sec.get("title") or "").strip()
+        title = _section_title(sec)
         current_path = path + [title] if title else list(path)
         for elem_ref in sec.get("elements", []):
             try:
@@ -116,9 +139,25 @@ def extract_document_index(raw: dict) -> dict | None:
     sections = raw.get("data", {}).get("sections", [])
     if not sections:
         return None
+    paras: list[dict] = raw.get("data", {}).get("paragraphs", [])
 
     section_by_idx: dict[int, dict] = {i: s for i, s in enumerate(sections)}
     visited: set[int] = set()
+
+    def _sec_title(sec: dict) -> str:
+        title = (sec.get("title") or "").strip()
+        if title:
+            return title
+        for elem_ref in sec.get("elements", []):
+            try:
+                parts = str(elem_ref).strip("/").split("/")
+                if parts[-2] == "paragraphs":
+                    pidx = int(parts[-1])
+                    if pidx < len(paras) and paras[pidx].get("role") == "sectionHeading":
+                        return (paras[pidx].get("content") or "").strip()
+            except (IndexError, ValueError):
+                pass
+        return ""
 
     def _node(sec_idx: int) -> dict | None:
         if sec_idx in visited:
@@ -127,7 +166,7 @@ def extract_document_index(raw: dict) -> dict | None:
         sec = section_by_idx.get(sec_idx)
         if sec is None:
             return None
-        title = (sec.get("title") or "").strip()
+        title = _sec_title(sec)
         children = []
         for elem_ref in sec.get("elements", []):
             try:
@@ -1039,7 +1078,8 @@ def process_document(raw: dict) -> list[RetrievalUnit]:
     page_context_map = _build_page_context_map(raw.get("data", {}), norm_tool)
     figure_element_set = _build_figure_element_set(raw.get("data", {}).get("figures", []))
     sections = raw.get("data", {}).get("sections", [])
-    section_path_map = _build_section_path_map(sections) if sections else {}
+    paragraphs_list = raw.get("data", {}).get("paragraphs", [])
+    section_path_map = _build_section_path_map(sections, paragraphs_list) if sections else {}
     units = []
     units.extend(_table_path(raw, source_tool, doc_prefix, doc_metadata))
     units.extend(_paragraph_path(
