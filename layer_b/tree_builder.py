@@ -75,9 +75,10 @@ def build_tree(raw: dict, llm_client: LLMClient | None = None) -> TreeNode | Non
                 content = (para.get("content") or "").strip()
                 page = _parse_page(para.get("source", ""))
                 role = para.get("role")
-                if role == "sectionHeading" and not title:
-                    title = content
-                    heading_page = page   # capture heading page for range calculation
+                if role == "sectionHeading":
+                    heading_page = page   # always capture for page range
+                    if not title:
+                        title = content   # only set title if not already from sec["title"]
                 elif content:
                     body_paras.append((content, page))
             elif kind == "sections":

@@ -158,6 +158,23 @@ def main():
     n = ingester.ingest(chunks)
     print(f"  [完成] {n} 個 chunk 已 ingest")
 
+    # ── document_index：儲存文件目錄索引（供 agentic loop 結構化導覽）────────
+    from layer_b.pipeline import extract_document_index
+    import re as _re
+    _raw_stem = PDF_PATH.stem
+    doc_stem_safe = _re.sub(r'[^\w\-]', '_', _raw_stem) if _raw_stem else "doc"
+    doc_index = extract_document_index(raw)
+    if doc_index:
+        ingester.store_document_index(doc_stem_safe, doc_index)
+        children = doc_index.get("children", [])
+        print(f"  [document_index] 已儲存（doc_stem={doc_stem_safe!r}），頂層章節 {len(children)} 個：")
+        for c in children[:6]:
+            print(f"    - {c.get('title', '?')}")
+        if len(children) > 6:
+            print(f"    ... 共 {len(children)} 個")
+    else:
+        print(f"  [document_index] 無 sections[] 樹，未儲存")
+
     reranker = BGEReranker()
     retriever = HybridRetriever(client=qdrant, collection_name=COLLECTION, reranker=reranker)
 
@@ -166,7 +183,7 @@ def main():
     from layer_e.agentic_pipeline import AgenticPipeline
     from layer_e.llm_client import GPT41Client
 
-    doc_stem = PDF_PATH.stem  # "乳癌診療指引-2026年"
+    doc_stem = doc_stem_safe  # sanitized stem，與 store_document_index 一致
     ranked = retriever.search_text(QUERY, top_k=5, prefetch_k=20, rerank=True)
     print(f"  [檢索] 取得 {len(ranked)} 筆 ranked results")
     for i, r in enumerate(ranked[:3]):
@@ -179,6 +196,14 @@ def main():
         doc_stem=doc_stem,
         abstention_threshold=0.0,  # 測試時停用 abstention，讓 agentic loop 運作
     )
+
+    # ── 驗證 document_index 有沒有注入 system prompt ─────────────────────
+    outline = getattr(agentic, "_document_outline", None)
+    if outline:
+        print(f"  [document_outline] ✅ 已注入（{len(outline)} chars）")
+        print(f"  預覽：\n{outline[:300]}{'...' if len(outline) > 300 else ''}")
+    else:
+        print(f"  [document_outline] ❌ 未注入（Qdrant 查不到 document_index）")
 
     t0 = time.time()
     result = agentic.run(QUERY, ranked)

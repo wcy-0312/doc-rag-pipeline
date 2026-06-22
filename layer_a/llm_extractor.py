@@ -509,7 +509,7 @@ def convert_pdf_llm(
     # 5. metadata
     metadata = build_metadata(
         pdf_path=pdf_path, category=category,
-        extractor="llm", page_count=page_count,
+        page_count=page_count,
         keywords=keywords,
     )
 
@@ -756,7 +756,7 @@ def convert_docx_llm(
     effective_category = category or _infer_document_type(docx_path.stem) or ""
     metadata = build_metadata(
         pdf_path=docx_path, category=category,
-        extractor="llm", page_count=page_count,
+        page_count=page_count,
         keywords=keywords,
     )
     llm_qc = _compute_llm_qc(sections_output)
@@ -937,7 +937,7 @@ def convert_image_llm(
     # 5. metadata / QC
     metadata = build_metadata(
         pdf_path=img_path, category=category,
-        extractor="llm", page_count=1,
+        page_count=1,
         keywords=keywords,
     )
     llm_qc = _compute_llm_qc(sections_output)

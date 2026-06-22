@@ -118,6 +118,7 @@ class DocumentIngester:
                     "display_markdown":  chunk.display_markdown,
                     "patient_id":        chunk.metadata.get("patient_id"),
                     "document_type":     chunk.metadata.get("document_type"),
+                    "file_name":         chunk.metadata.get("file_name", ""),
                 }
                 points.append(
                     PointStruct(

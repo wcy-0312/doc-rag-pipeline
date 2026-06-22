@@ -18,6 +18,7 @@ def _build_para_doc_metadata(unit: dict) -> dict:
         "excluded_items": unit["structured_json"].get("excluded_items", []),
         "patient_id": doc_meta.get("patient_id"),
         "document_type": doc_meta.get("document_type"),
+        "file_name": doc_meta.get("file_name", ""),
     }
 
 
@@ -31,6 +32,7 @@ def _build_table_metadata(unit: dict) -> dict:
         "source_pages": unit["source_pages"],
         "patient_id": doc_meta.get("patient_id"),
         "document_type": doc_meta.get("document_type"),
+        "file_name": doc_meta.get("file_name", ""),
     }
 
 

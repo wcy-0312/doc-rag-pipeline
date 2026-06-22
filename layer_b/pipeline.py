@@ -227,6 +227,7 @@ def _build_doc_metadata(raw: dict) -> dict:
         "document_type": meta.get("document_type"),
         "patient_id":    meta.get("patient_id"),
         "keywords":      meta.get("keywords", []),
+        "file_name":     meta.get("file_name", ""),
     }
 
 

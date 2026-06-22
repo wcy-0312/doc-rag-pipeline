@@ -9,9 +9,12 @@ def _extract_source_doc(
 ) -> str | None:
     """Build a human-readable document identifier.
 
-    Priority: patient_id + document_type from metadata > stem from retrieval_unit_id.
+    Priority: file_name (with extension) > patient_id + document_type > stem from retrieval_unit_id.
     """
     if metadata:
+        file_name = metadata.get("file_name")
+        if file_name:
+            return file_name
         pid = metadata.get("patient_id")
         dtype = metadata.get("document_type")
         if pid:

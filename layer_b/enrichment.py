@@ -33,14 +33,6 @@ _FIGURE_SYSTEM = (
     "只輸出 JSON，不要其他說明。"
 )
 
-_PARAGRAPH_SYSTEM = (
-    "你是醫療知識庫整理員。請判斷以下段落是否有明確限定「適用對象或情境」"
-    "（如特定癌別亞型、特定治療史、特定分期、特定手術類型等）。\n"
-    "若無限定（適用一般病人），只輸出 {\"has_restriction\": false}\n"
-    "若有限定，輸出 JSON：\n"
-    "{\"has_restriction\": true, \"applicability\": \"限定對象或情境（20字以內）\"}\n"
-    "只輸出 JSON，不要其他說明。"
-)
 
 
 def _is_trivial_table(unit: RetrievalUnit) -> bool:
@@ -58,15 +50,35 @@ def _is_trivial_table(unit: RetrievalUnit) -> bool:
 
 
 _FIGURE_PLACEHOLDER_RE = re.compile(r"^\[圖表[^\]]*\]\s*$")
+_ASCII_ONLY_RE = re.compile(r'^[A-Za-z0-9\s\-\.,()/*&+]+$')
+# Institution name keywords that indicate a logo/header image rather than clinical content.
+_INSTITUTION_KW_RE = re.compile(
+    r'\b(Hospital|University|Medical\s+Center|Clinic|Institute)\b', re.IGNORECASE
+)
+_MIN_FIGURE_TEXT_LEN = 15
 
 
 def _is_trivial_figure(unit: RetrievalUnit) -> bool:
-    """Layer 1 pre-filter: True for figures with no useful text content."""
+    """Layer 1 pre-filter: True for figures with no useful clinical text content.
+
+    Filters three cases:
+    1. Empty text.
+    2. Pure placeholder "[圖表 第N頁]" — no elements were linked.
+    3. Very short text (≤15 chars) — garbled OCR or single-character artifacts.
+    4. Short ASCII-only institution name (≤80 chars, contains Hospital/University/
+       Medical Center/Clinic/Institute) — logo or header image carrying no clinical
+       information (e.g. "Chung Shan Medical University Hospital").
+    """
     text = unit.embedding_text.strip()
     if not text:
         return True
-    # Fallback placeholder text — no elements were linked
-    return bool(_FIGURE_PLACEHOLDER_RE.match(text))
+    if _FIGURE_PLACEHOLDER_RE.match(text):
+        return True
+    if len(text) <= _MIN_FIGURE_TEXT_LEN:
+        return True
+    if len(text) <= 80 and _ASCII_ONLY_RE.match(text) and _INSTITUTION_KW_RE.search(text):
+        return True
+    return False
 
 
 def _build_prefix(result: dict) -> str:
@@ -106,13 +118,14 @@ def enrich_units(
     units: list[RetrievalUnit],
     llm_client: Any,
 ) -> list[RetrievalUnit]:
-    """Apply LLM semantic enrichment to table, figure, and paragraph units.
+    """Apply LLM semantic enrichment to table and figure units.
 
-    - Tables/figures: LLM judges meaningfulness and generates 摘要/適用/可解答 prefix.
-    - Paragraphs: LLM detects explicit patient/context restrictions and prepends [適用].
-      This improves retrieval precision: a DCIS-specific paragraph gets
-      "[適用] DCIS患者" in its embedding_text, reducing cosine similarity with
-      queries about non-DCIS patients without any rule-based filtering.
+    Tables/figures: LLM judges meaningfulness and generates 摘要/適用/可解答 prefix,
+    improving retrieval for chunks whose raw embedding_text (KV linearization or
+    bare caption) carries little semantic signal.
+
+    Paragraphs are NOT enriched here — their heading_breadcrumb already provides
+    section context, and per-query filtering is handled by layer_e/query_enrichment.py.
 
     Fail-open: on LLM error, the unit is returned unchanged.
 
@@ -137,12 +150,6 @@ def enrich_units(
                 enrichment = _call_llm(llm_client, _FIGURE_SYSTEM, unit.embedding_text[:600])
                 if enrichment and enrichment.get("meaningful"):
                     unit = replace(unit, embedding_text=_build_prefix(enrichment) + unit.embedding_text)
-
-        elif unit_type == "paragraph":
-            enrichment = _call_llm(llm_client, _PARAGRAPH_SYSTEM, unit.embedding_text[:400])
-            if enrichment and enrichment.get("has_restriction") and enrichment.get("applicability"):
-                prefix = f"[適用] {enrichment['applicability']}\n"
-                unit = replace(unit, embedding_text=prefix + unit.embedding_text)
 
         result.append(unit)
     return result

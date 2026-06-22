@@ -163,23 +163,17 @@ def _compute_qc(
     _di_api_error: str | None,
     total_text_chars: int,
 ) -> dict:
-    """量化照片 path 的資訊損失。
-
-    照片 path 無 figures（照片本身即整頁），QC 重點在文字提取品質。
-    """
+    """量化照片 path 的資訊損失。"""
     page_stats   = confidence.get("page_stats", [])
     pages_total  = len(page_stats) or len(raw.get("pages", [])) or 1
 
-    # unreadable_pages：avg_confidence < 0.5 的頁（OCR 嚴重失敗）
     unreadable_pages = [
         p["page_no"] for p in page_stats
         if p.get("avg_confidence") is not None and p["avg_confidence"] < 0.5
     ]
-    no_word_pages  = confidence.get("pages_no_words", [])
-    all_bad_pages  = sorted(set(unreadable_pages) | set(no_word_pages))
-    pages_unreadable = len(all_bad_pages)
+    no_word_pages    = confidence.get("pages_no_words", [])
+    pages_unreadable = len(sorted(set(unreadable_pages) | set(no_word_pages)))
 
-    # 損失率計算（照片 path 無 figures，figure_loss=0）
     text_loss = confidence.get("low_confidence_rate") or 0.0
     page_loss = round(pages_unreadable / pages_total, 4)
     estimated = round(0.6 * text_loss + 0.3 * page_loss, 4)
@@ -197,18 +191,9 @@ def _compute_qc(
         warnings_list.append("IMAGE_OCR_INSUFFICIENT_STORED_AS_PAGE_IMAGE")
 
     return {
-        "figures_total":            0,
-        "figures_materialized":     0,
-        "figures_meaningful":       0,
-        "unreadable_pages":         all_bad_pages,
-        "pages_unreadable":         pages_unreadable,
         "estimated_info_loss_rate": estimated,
         "qc_level":                 qc_level,
         "warnings":                 warnings_list,
-        "errors": (
-            [{"stage": "di_api_call", "message": _di_api_error}]
-            if _di_api_error else []
-        ),
     }
 
 
@@ -279,20 +264,14 @@ def _build_markdown(raw: dict) -> str:
 def convert_image_azure_di(
     img_path: Path,
     category: str = "",
-    output_dir: Path | None = None,
     llm=None,
 ) -> dict:
     """Azure DI v4.0 照片 path：圖片 → structured JSON（schema-v3.0）。
 
-    Azure DI 原始輸出最小轉換後直接保留。
-    per-cell confidence 明確設為 null（image mode 不提供）。
-    原始圖片複製至 output_dir/figures/ 作為 page_images[1]。
-
     Args:
-        img_path   : 圖片路徑（.jpg/.jpeg/.png/.tiff/.heif）
-        category   : 文件類別（用於 metadata.classification.document_type）
-        output_dir : 輸出目錄（有值時存原始圖片）
-        llm        : LLM 實例（有值時對 markdown 進行關鍵字萃取）
+        img_path : 圖片路徑（.jpg/.jpeg/.png/.tiff/.heif）
+        category : 文件類別
+        llm      : LLM 實例（有值時對 markdown 進行關鍵字萃取）
 
     Returns:
         schema-v3.0 dict
@@ -393,19 +372,9 @@ def convert_image_azure_di(
     # 照片通常只有 1 頁
     page_count = len(raw.get("pages", [])) or 1
 
-    # 嘗試從 paragraphs 取得文件標題
-    title_para = None
-    for p in raw.get("paragraphs", []):
-        if p.get("role") == "title":
-            content = (p.get("content") or "").strip()
-            if content:
-                title_para = content
-                break
-
     metadata = build_metadata(
         pdf_path=img_path,
         category=category,
-        extractor="azure_di",
         page_count=page_count,
         markdown=markdown if not _di_api_error else "",
         llm=llm,

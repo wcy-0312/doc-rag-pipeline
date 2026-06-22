@@ -111,3 +111,29 @@ def test_summary_generated_for_nonleaf():
 def test_no_summary_when_llm_is_none():
     tree = build_tree(_RAW_CU, llm_client=None)
     assert tree.summary == ""
+
+
+def test_page_range_includes_heading_page_when_section_has_title():
+    """Heading page must be in range even when sec already has a title field."""
+    raw = {
+        "metadata": {"file_name": "doc.pdf"},
+        "data": {
+            "sections": [
+                {
+                    "title": "預設標題",          # pre-set title
+                    "elements": [
+                        "/paragraphs/0",           # sectionHeading at page 5
+                        "/paragraphs/1",           # body at page 6
+                    ]
+                }
+            ],
+            "paragraphs": [
+                {"role": "sectionHeading", "content": "章節標題", "source": "D(5,0,0,1,0,1,1,0,1)", "spans": []},
+                {"role": None, "content": "章節內文", "source": "D(6,0,0,1,0,1,1,0,1)", "spans": []},
+            ],
+        }
+    }
+    tree = build_tree(raw)
+    assert tree is not None
+    assert tree.start_page == 5   # heading page must be included
+    assert tree.end_page == 6

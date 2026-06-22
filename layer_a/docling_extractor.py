@@ -36,8 +36,7 @@ import re as _re
 _PUA_RE = _re.compile(r"[-�]")
 
 
-def _compute_qc(raw: dict, page_count: int,
-                pictures: list[dict], output_dir_set: bool) -> dict:
+def _compute_qc(raw: dict, page_count: int, pictures: list[dict]) -> dict:
     texts  = raw.get("texts",  [])
     tables = raw.get("tables", [])
 
@@ -50,7 +49,6 @@ def _compute_qc(raw: dict, page_count: int,
                 items_per_page_map[pn] = items_per_page_map.get(pn, 0) + 1
 
     all_page_nos = set(range(1, page_count + 1))
-    pages_no_extracted_items = sorted(all_page_nos - set(items_per_page_map))
     total_items  = sum(items_per_page_map.values())
     avg_density  = total_items / max(page_count, 1)
     low_threshold = max(1, avg_density * 0.3)
@@ -75,13 +73,8 @@ def _compute_qc(raw: dict, page_count: int,
                 cells_empty += 1
     empty_cell_rate = round(cells_empty / max(cells_total, 1), 4)
 
-    # ── 4. 圖片覆蓋 ───────────────────────────────────────────────────────
-    figures_total        = len(pictures)
-    figures_materialized = sum(1 for p in pictures if p.get("has_image"))
-    figure_loss = (
-        round(1 - figures_materialized / figures_total, 4)
-        if output_dir_set and figures_total > 0 else 0.0
-    )
+    # ── 4. 圖片覆蓋：DOCX 嵌入圖片目前不支援渲染（has_image=False），損失率固定 0
+    _ = pictures  # 保留參數以備未來支援渲染
 
     # ── 5. 綜合損失率 ─────────────────────────────────────────────────────
     text_loss  = garbled_char_rate
@@ -91,8 +84,7 @@ def _compute_qc(raw: dict, page_count: int,
     estimated = round(
         0.45 * text_loss +
         0.25 * page_loss +
-        0.20 * table_loss +
-        0.10 * figure_loss,
+        0.20 * table_loss,
         4
     )
     qc_level = (
@@ -102,17 +94,9 @@ def _compute_qc(raw: dict, page_count: int,
     )
 
     return {
-        "garbled_char_rate":         garbled_char_rate,
-        "items_per_page":            round(avg_density, 1),
-        "low_density_pages":         low_density_pages,
-        "pages_no_extracted_items":  pages_no_extracted_items,
-        "empty_cell_rate":           empty_cell_rate,
-        "figures_total":             figures_total,
-        "figures_materialized":      figures_materialized,
-        "estimated_info_loss_rate":  estimated,
-        "qc_level":                  qc_level,
-        "warnings":                  [],
-        "errors":                    [],
+        "estimated_info_loss_rate": estimated,
+        "qc_level":                 qc_level,
+        "warnings":                 [],
     }
 
 
@@ -122,19 +106,15 @@ def convert_word_docling(
     word_path: Path,
     llm=None,
     category: str = "",
-    output_dir: Path | None = None,
-    describe_visuals: bool = False,
 ) -> dict:
     """Word path：.doc / .docx → Docling 原始結構（schema-v3.0）。
 
     .doc 檔案先由 LibreOffice 轉為 .docx，再遞迴處理。
 
     Args:
-        word_path      : .doc 或 .docx 路徑
-        llm            : LLM 實例（保留供介面一致性，目前未使用）
-        category       : 文件類別
-        output_dir     : 輸出目錄（保留供介面一致性，目前未使用）
-        describe_visuals: 保留供介面一致性，不使用
+        word_path : .doc 或 .docx 路徑
+        llm       : LLM 實例（有值時對 markdown 進行關鍵字萃取）
+        category  : 文件類別
     """
     from docling.document_converter import DocumentConverter
     from metadata_builder import build_metadata
@@ -167,8 +147,6 @@ def convert_word_docling(
                 _converted,
                 llm=llm,
                 category=category,
-                output_dir=output_dir,
-                describe_visuals=describe_visuals,
             )
 
     # 1. Docling 轉換
@@ -182,7 +160,7 @@ def convert_word_docling(
     except Exception as exc:
         metadata = build_metadata(
             pdf_path=word_path, category=category,
-            extractor="docling", page_count=0,
+            page_count=0,
             markdown="", llm=llm,
         )
         metadata["qc"] = {
@@ -226,12 +204,12 @@ def convert_word_docling(
     # 4. metadata
     metadata = build_metadata(
         pdf_path=word_path, category=category,
-        extractor="docling", page_count=page_count,
+        page_count=page_count,
         markdown=markdown, llm=llm,
     )
 
     # 5. QC
-    qc = _compute_qc(raw, page_count, pictures, output_dir is not None)
+    qc = _compute_qc(raw, page_count, pictures)
 
     metadata["qc"] = {
         "qc_level":                 qc["qc_level"],

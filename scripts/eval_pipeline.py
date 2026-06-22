@@ -83,21 +83,12 @@ from layer_a import get_extractor_for_file, get_extractor  # noqa: E402
 
 
 def _call_extractor(tool: str, file_path: Path, images_dir: Path) -> dict:
-    """呼叫對應 extractor，統一處理 output_dir 參數名稱。
-
-    azure_cu → convert_pdf_azure_cu(pdf_path, output_dir=...)
-    azure_di → convert_image_azure_di(img_path, output_dir=...)
-    docling  → convert_pdf_docling(pdf_path, output_dir=...)
-    """
     extractor = get_extractor(tool)
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    if tool == "azure_cu":
-        return extractor(file_path, output_dir=images_dir)
-    elif tool == "azure_di":
-        return extractor(file_path, output_dir=images_dir)
-    elif tool == "docling":
-        return extractor(file_path, output_dir=images_dir)
+    if tool in {"azure_cu", "azure_di", "docling"}:
+        return extractor(file_path)
+
     else:
         return extractor(str(file_path))
 

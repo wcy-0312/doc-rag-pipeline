@@ -67,13 +67,6 @@ def build_metadata(
     markdown: str | None = None,
     llm=None,
     keywords: list[str] | None = None,
-    # 以下參數保留相容性但不使用
-    extractor: str | None = None,
-    title: str | None = None,
-    version: str | None = None,
-    revision_date: str | None = None,
-    effective_date: str | None = None,
-    department: str | None = None,
 ) -> dict:
     """Flat metadata 結構。
 

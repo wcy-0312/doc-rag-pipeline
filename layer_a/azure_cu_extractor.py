@@ -33,9 +33,6 @@ from pathlib import Path
 # config.py 在 lib/ 的上層目錄
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# 機構名稱關鍵字：跳過這類「title」段落，改用 sectionHeading 作為文件標題
-_INSTITUTION_RE = re.compile(r'醫院|大學|醫學|學院|Hospital|University|Medical|Institute')
-
 # 這些類別的 PDF 全頁儲存截圖，確保含算法圖/流程表的頁面也有 page_image_refs
 _FULL_PAGE_SAVE_CATEGORIES: frozenset[str] = frozenset({
     "癌症診療指引", "臨床指引", "diagnostic_guideline",
@@ -260,121 +257,19 @@ def _detect_checkbox_states(doc, page_no: int) -> list[dict]:
         return []
 
 
-# ── QC 量化 ──────────────────────────────────────────────────────────────
-
-def _compute_qc(
-    raw: dict,
-    confidence: dict,
-    figures: list[dict],
-    _cu_api_error: str | None,
-    output_dir_set: bool = False,
-    pdf_path: Path | None = None,
-) -> dict:
-    """量化轉換過程的資訊損失。
-
-    真正新增的資訊（非可由其他欄位算出）：
-      figures_meaningful   — 有意義尺寸的圖（從 source polygon 計算）
-      pages_unreadable     — 平均信心 < 0.5 的頁
-      estimated_info_loss_rate — 綜合損失率
-      qc_level             — good / warning / danger
-    """
-    page_stats  = confidence.get("page_stats", [])
-    pages_total = len(page_stats) or len(raw.get("pages", [])) or 1
-
-    # unreadable_pages：avg_confidence 不為 None 且 < 0.5（OCR 品質差）
-    unreadable_pages = [
-        p["page_no"] for p in page_stats
-        if p.get("avg_confidence") is not None and p["avg_confidence"] < 0.5
-    ]
-    # pages_no_words：無任何 words（純圖像頁或空白頁）— 同樣代表資訊損失
-    # 兩者合計才能正確反映 page_loss；之前只算 unreadable 會讓圖像頁的 QC 虛報 good
-    no_word_pages  = confidence.get("pages_no_words", [])
-    all_bad_pages  = sorted(set(unreadable_pages) | set(no_word_pages))
-    pages_unreadable = len(all_bad_pages)
-
-    # figures：從 source polygon 計算面積
-    figures_total = len(figures)
-    figures_meaningful = 0
-    for f in figures:
-        parsed = _figure_bbox(str(f.get("source", "") or ""))
-        if parsed:
-            _, x_min, y_min, x_max, y_max = parsed
-            area = (x_max - x_min) * (y_max - y_min)
-            if area >= 2.0:
-                figures_meaningful += 1
-
-    # 損失率計算（移除 figure_loss，figure 保存由 page_images 涵蓋）
-    text_loss = confidence.get("low_confidence_rate") or 0.0
-    page_loss = round(pages_unreadable / pages_total, 4)
-
-    estimated_loss = round(0.7 * text_loss + 0.3 * page_loss, 4)
-    qc_level = (
-        "danger"  if estimated_loss > 0.10 else
-        "warning" if estimated_loss > 0.03 else
-        "good"
-    )
-
-    # 小字體偵測：臨床關鍵數值若以 <8pt 呈現，OCR 精準度可能下降
-    small_font_pages: list[int] = []
-    try:
-        import fitz as _fitz_sf
-        if pdf_path is None:
-            raise ValueError("no path")
-        _doc_sf = _fitz_sf.open(str(pdf_path))
-        for _pi in range(_doc_sf.page_count):
-            _rawdict = _doc_sf[_pi].get_text("rawdict")
-            for _blk in _rawdict.get("blocks", []):
-                for _ln in _blk.get("lines", []):
-                    for _sp in _ln.get("spans", []):
-                        if _sp.get("size", 99) < 8 and _sp.get("text", "").strip():
-                            small_font_pages.append(_pi + 1)
-                            break
-                    else:
-                        continue
-                    break
-        _doc_sf.close()
-    except Exception:
-        pass
-
-    warnings_list = ["AZURE_CU_ERROR"] if _cu_api_error else []
-    if small_font_pages:
-        warnings_list.append(
-            f"SMALL_FONT_PAGES {sorted(set(small_font_pages))}: "
-            "<8pt 文字（臨床分期/劑量值），OCR 精準度可能下降。"
-        )
-
-    return {
-        "figures_total":           figures_total,
-        "figures_meaningful":      figures_meaningful,
-        "unreadable_pages":        all_bad_pages,
-        "pages_unreadable":        pages_unreadable,
-        "estimated_info_loss_rate": estimated_loss,
-        "qc_level":                qc_level,
-        "warnings":                warnings_list,
-        "errors": (
-            [{"stage": "cu_api_call", "message": _cu_api_error}]
-            if _cu_api_error else []
-        ),
-    }
-
-
 # ── 主入口 ───────────────────────────────────────────────────────────────────
 
 def convert_pdf_azure_cu(
     pdf_path: Path,
     category: str = "",
-    output_dir: Path | None = None,
     llm=None,
 ) -> dict:
     """CU API path：PDF → structured JSON（schema-v3.0）。
 
-    CU API 原始輸出最小轉換後直接保留（figures 完全不修改）。
-
     Args:
-        pdf_path   : PDF 檔案路徑
-        category   : 文件類別
-        output_dir : 圖片輸出根目錄（None = 不存圖）
-        llm        : LLM 實例（有值時對 markdown 進行關鍵字萃取）
+        pdf_path : PDF 檔案路徑
+        category : 文件類別
+        llm      : LLM 實例（有值時對 markdown 進行關鍵字萃取）
 
     Returns:
         schema-v3.0 dict
@@ -420,12 +315,7 @@ def convert_pdf_azure_cu(
         "note": _cu_api_error or "CU API unavailable",
     }
 
-    # ── 3. QC 量化 ───────────────────────────────────────────────────
-    qc = _compute_qc(raw, confidence, raw.get("figures", []), _cu_api_error,
-                     output_dir_set=output_dir is not None,
-                     pdf_path=pdf_path)
-
-    # ── 4. metadata ──────────────────────────────────────────────────
+    # ── 3. metadata ──────────────────────────────────────────────────
     # CU API 失敗時用 fitz 取得真實頁數，避免 fallback 成誤導性的 1
     cu_page_count = len(raw.get("pages", []))
     if cu_page_count:
@@ -439,55 +329,19 @@ def convert_pdf_azure_cu(
         except Exception:
             page_count = 0
 
-    # 從段落萃取文件標題（四層策略）
-    # 1. title role，但跳過機構名稱（院名/校名）
-    # 2. 「主題名稱」後的 body paragraph（護理 SOP 格式）
-    # 3. 第一個 sectionHeading
-    # 4. fallback → None（metadata_builder 用檔名）
-    paras = raw.get("paragraphs", [])
-    title_para = None
-
-    # 策略 1：title role，非機構名稱
-    for p in paras:
-        if p.get("role") == "title":
-            content = (p.get("content") or "").strip()
-            if content and not _INSTITUTION_RE.search(content):
-                title_para = content
-                break
-
-    # 策略 2：「主題名稱」後的 body paragraph（SOP 表格格式）
-    if not title_para:
-        for i, p in enumerate(paras):
-            content = (p.get("content") or "").strip()
-            if content == "主題名稱":
-                for j in range(i + 1, min(i + 3, len(paras))):
-                    nxt = (paras[j].get("content") or "").strip()
-                    if nxt and len(nxt) >= 3:
-                        title_para = nxt
-                        break
-                if title_para:
-                    break
-
-    # 策略 3：第一個 sectionHeading（通用 fallback）
-    if not title_para:
-        for p in paras:
-            if p.get("role") == "sectionHeading":
-                content = (p.get("content") or "").strip()
-                if content:
-                    title_para = content
-                    break
-    from metadata_builder import build_metadata
+    from metadata_builder import build_metadata, _infer_document_type
+    resolved_category = category or _infer_document_type(pdf_path.stem) or ""
     metadata = build_metadata(
         pdf_path=pdf_path,
-        category=category,
-        extractor="azure_cu",
+        category=resolved_category,
         page_count=page_count,
         markdown=raw.get("markdown", "") if not _cu_api_error else "",
         llm=llm,
     )
 
-    # ── 6b. Checkbox 狀態偵測 ─────────────────────────────────────────────
+    # ── 6b. Checkbox 狀態偵測 + 小字體警告 ───────────────────────────────
     checkbox_states_by_page: dict[int, list[dict]] = {}
+    small_font_pages: list[int] = []
     try:
         import fitz as _fitz_cb
         _cb_doc = _fitz_cb.open(str(pdf_path))
@@ -495,16 +349,36 @@ def convert_pdf_azure_cu(
             _states = _detect_checkbox_states(_cb_doc, _pno)
             if _states:
                 checkbox_states_by_page[_pno] = _states
+            try:
+                _rawdict = _cb_doc[_pno - 1].get_text("rawdict")
+                for _blk in _rawdict.get("blocks", []):
+                    for _ln in _blk.get("lines", []):
+                        for _sp in _ln.get("spans", []):
+                            if _sp.get("size", 99) < 8 and _sp.get("text", "").strip():
+                                small_font_pages.append(_pno)
+                                break
+                        else:
+                            continue
+                        break
+            except Exception:
+                pass
         _cb_doc.close()
     except Exception:
         pass
+
+    warnings_list: list[str] = ["AZURE_CU_ERROR"] if _cu_api_error else []
+    if small_font_pages:
+        warnings_list.append(
+            f"SMALL_FONT_PAGES {sorted(set(small_font_pages))}: "
+            "<8pt 文字（臨床分期/劑量值），OCR 精準度可能下降。"
+        )
 
     # ── 6a. 視覺頁面參考（供 Layer E 按需渲染）──────────────────────────
     page_images = _page_image_refs(
         pdf_path,
         raw_figures=raw.get("figures", []),
         confidence=confidence,
-        category=category,
+        category=resolved_category,
         page_count=page_count,
         checkbox_pages=set(checkbox_states_by_page.keys()) if checkbox_states_by_page else None,
     ) if not _cu_api_error else {}
@@ -512,15 +386,11 @@ def convert_pdf_azure_cu(
     # ── 7. 組合 schema-v3.0 output（metadata + data 兩層）───────────────
     pages_no_words = confidence.get("pages_no_words", []) if isinstance(confidence, dict) else []
 
-    metadata["qc"] = {
-        "qc_level":                 qc["qc_level"],
-        "estimated_info_loss_rate": qc["estimated_info_loss_rate"],
-    }
     metadata["extractor_metadata"] = {
         "tool":             "azure_content_understanding",
         "api_version":      "2024-12-01-preview",
         "is_fully_scanned": len(pages_no_words) == page_count and page_count > 0,
-        "warnings":         qc.get("warnings", []),
+        "warnings":         warnings_list,
     }
 
     return {

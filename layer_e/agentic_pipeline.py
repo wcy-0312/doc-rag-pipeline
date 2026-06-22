@@ -1,8 +1,9 @@
 import json
 import logging
+import re
 from typing import Optional
 
-from layer_e import context_packer, guardrail
+from layer_e import context_packer, guardrail, query_enrichment
 from layer_e.agentic_tools import TOOL_DEFINITIONS, execute_tool
 from layer_e.models import ClaimCitation, GenerationResult
 from layer_e.prompt_builder import format_evidence_block
@@ -20,12 +21,15 @@ _SYSTEM_TEMPLATE = """\
 - retrieve_more: 在文件中搜尋更多相關段落或表格
 
 停止規則：
-1. 答案中每一個 medical claim 必須引用 Evidence 編號（如 [E1]）
-2. 無法找到支持的 claim 標記 [unsupported]
-3. 當所有 claim 都有 citation（或標記 [unsupported]）時，輸出最終 JSON
+1. 每一個 medical claim 必須在 claims[] 陣列中列出對應的 Evidence 編號；answer 欄位為純文字散文，不需內嵌 [En] 標注
+2. 無法找到支持的 claim 標記 citations: ["unsupported"]
+3. 當所有 claim 都有 citation（或標記 unsupported）時，輸出最終 JSON
+4. 若問題涉及特定 TNM 分期或分類（如 cT3N2M0），只能引用 Evidence 中明確對應該分期的敘述；若文件僅描述一般適用條件，請如實說明文件未針對此分期給出明確建議，並引用文件的一般條件供參考，不得自行推論符合性
+5. 當答案涉及藥物適應症或健保給付條件時，必須從 Evidence 中完整列出所有條件（包括前置療程要求、時間限制、排除條件等），不得以「需符合特定條件」等模糊措辭概括
+6. 當問題詢問特定分期或病人的「治療建議」時，若 Evidence 未涵蓋系統性治療（化療／靶向／內分泌）面向，建議先呼叫 retrieve_more 補充一次；若補充後仍無相關 Evidence，依現有資訊如實回答，說明指引在該面向未提供明確內容，不必反覆搜尋或拒絕回答
 
 最終答案必須是以下 JSON 格式，不加 markdown fence：
-{{"answer": "完整答案", "claims": [{{"text": "claim", "citations": ["E1"]}}], "abstain": false, "abstain_reason": null}}
+{{"answer": "完整散文答案（不含任何 [En] 標注）", "claims": [{{"text": "claim 原文", "citations": ["E1", "E2"]}}], "evidence_summaries": [{{"id": "E1", "summary": "一到兩句中文摘要，說明此段內容對回答問題的貢獻，避免直接複製原文"}}], "abstain": false, "abstain_reason": null}}
 """
 
 _SOFT_LIMIT_NOTICE = (
@@ -33,7 +37,73 @@ _SOFT_LIMIT_NOTICE = (
     "對無法找到 citation 的 claim 標記 [unsupported]。請立即輸出最終 JSON。"
 )
 
+# P2: coverage hint injected when treatment-recommendation query lacks systemic treatment evidence
+_COVERAGE_HINT_TEMPLATE = (
+    "\n\n[系統提示] 偵測到「治療建議」類問題，但目前 Evidence 未涵蓋系統性治療（化療／靶向／內分泌）面向。"
+    "請在作答前先呼叫 retrieve_more 補充，例如：\n"
+    "- retrieve_more(\"{stage}系統性治療 化療\")\n"
+    "- retrieve_more(\"{stage}手術 新輔助治療\")\n"
+    "確認多面向 Evidence 後再給出最終答案。"
+)
+
+_TREATMENT_QUERY_RE = re.compile(
+    r'治療建議|如何治療|治療方案|治療原則|應.*治療|能.*治療|[cCpP][tT]\d[nN]\d[mM]\d',
+)
+
+_SYSTEMIC_KEYWORDS = [
+    '化療', '化學治療', '靶向', '標靶', '內分泌', '荷爾蒙',
+    'CDK', 'trastuzumab', 'pertuzumab', 'anthracycline', 'taxane',
+    '系統性治療', '輔助治療', 'neoadjuvant', '新輔助',
+]
+
+# If the query already names specific systemic treatment modalities, the user is
+# asking a comparison/selection question — P2 coverage hint is not needed.
+_SYSTEMIC_IN_QUERY_RE = re.compile(
+    r'化療|化學治療|靶向|標靶|內分泌|荷爾蒙治療|trastuzumab|pertuzumab|新輔助|neoadjuvant',
+    re.IGNORECASE,
+)
+
+_TNM_RE = re.compile(r'[cCpP]?[tT](\d)[nN](\d)[mM](\d)')
+
 _UNSUPPORTED_MARKER = "unsupported"
+
+
+def _is_treatment_recommendation_query(query: str) -> bool:
+    if not _TREATMENT_QUERY_RE.search(query):
+        return False
+    # Query already specifies systemic modalities → user is asking a selection
+    # question, not an open "give me a plan" question; skip P2 hint.
+    if _SYSTEMIC_IN_QUERY_RE.search(query):
+        return False
+    return True
+
+
+def _lacks_systemic_coverage(evidence_list: list) -> bool:
+    """Return True when no evidence chunk mentions systemic treatment."""
+    combined = " ".join(item.content for item in evidence_list).lower()
+    return not any(kw.lower() in combined for kw in _SYSTEMIC_KEYWORDS)
+
+
+def _extract_stage_hint(query: str) -> str:
+    m = _TNM_RE.search(query)
+    return m.group(0) if m else "早期乳癌"
+
+
+def _renumber_evidence(evidence_list: list, evidence_map: dict) -> tuple[list, dict]:
+    """Renumber evidence items E1, E2, ... by position after filtering.
+
+    format_evidence_block always assigns labels by position in the list, so
+    evidence_map keys must stay in sync — otherwise LLM citations like "E1"
+    won't resolve to the correct entry in evidence_map.
+    """
+    from dataclasses import replace as dc_replace
+    new_list = []
+    new_map = {}
+    for i, item in enumerate(evidence_list, start=1):
+        new_id = f"E{i}"
+        new_list.append(dc_replace(item, id=new_id))
+        new_map[new_id] = evidence_map[item.id]
+    return new_list, new_map
 
 
 def _format_document_index(index: dict) -> str:
@@ -60,7 +130,7 @@ class AgenticPipeline:
         doc_stem: str,
         soft_limit: int = 8,
         hard_limit: int = 12,
-        abstention_threshold: float = 0.10,
+        abstention_threshold: float = 0.0,
     ):
         self._llm = llm_client
         self._retriever = retriever
@@ -69,6 +139,7 @@ class AgenticPipeline:
         self._soft_limit = soft_limit
         self._hard_limit = hard_limit
         self._abstention_threshold = abstention_threshold
+        self._enable_query_enrichment = True
 
         # Load document index for pre-query navigation
         document_index = None
@@ -99,6 +170,11 @@ class AgenticPipeline:
             )
 
         evidence_list, evidence_map = context_packer.pack(ranked_results)
+        if self._enable_query_enrichment:
+            evidence_list, evidence_map = query_enrichment.filter_evidence(
+                query, evidence_list, evidence_map, self._llm
+            )
+            evidence_list, evidence_map = _renumber_evidence(evidence_list, evidence_map)
         evidence_block = format_evidence_block(evidence_list)
         system_content = _SYSTEM_TEMPLATE.format(evidence_block=evidence_block)
         if self._document_outline:
@@ -106,6 +182,11 @@ class AgenticPipeline:
                 "\n\n文件結構概覽（可輔助決定 retrieve_more 應搜尋哪個章節）：\n"
                 + self._document_outline
             )
+        # P2: inject coverage hint when treatment query lacks systemic evidence
+        if _is_treatment_recommendation_query(query) and _lacks_systemic_coverage(evidence_list):
+            stage = _extract_stage_hint(query)
+            system_content += _COVERAGE_HINT_TEMPLATE.format(stage=stage)
+            logger.info("Coverage hint injected for treatment query (stage=%s)", stage)
 
         messages = [
             {"role": "system", "content": system_content},
@@ -200,7 +281,8 @@ class AgenticPipeline:
                 "generate_with_tools returned ([], None) — LLM gave no content; treating as empty answer"
             )
         try:
-            data = json.loads(content or "{}")
+            cleaned = re.sub(r',\s*([\]\}])', r'\1', content or "{}")
+            data = json.loads(cleaned)
         except (json.JSONDecodeError, TypeError):
             data = {"answer": content or "", "claims": [], "abstain": False, "abstain_reason": None}
 
@@ -225,6 +307,12 @@ class AgenticPipeline:
                 unsupported.append(c.get("text", ""))
             claims.append(ClaimCitation(text=c.get("text", ""), citations=clean))
 
+        evidence_summaries = {
+            item["id"]: item["summary"]
+            for item in data.get("evidence_summaries", [])
+            if "id" in item and "summary" in item
+        }
+
         safety_verdict = "needs_review" if unsupported else "safe"
         return GenerationResult(
             answer=data.get("answer", ""),
@@ -235,4 +323,5 @@ class AgenticPipeline:
             abstain_reason=None,
             safety_verdict=safety_verdict,
             steps_log=steps_log,
+            evidence_summaries=evidence_summaries,
         )
