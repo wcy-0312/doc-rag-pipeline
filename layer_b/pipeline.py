@@ -435,27 +435,31 @@ def _normalize_source_tool(tool: str) -> str:
 
 
 def _doc_confidence(raw: dict) -> tuple[str, str, float]:
-    """Return (confidence_level, quality_flag, retrieval_weight) for paragraph units.
+    """Return (confidence_level, quality_flag, retrieval_weight).
 
-    Reads estimated_info_loss_rate from metadata.qc.
+    retrieval_weight 固定 1.0 — 品質不影響 retrieval 排名。
+    quality_flag="low" が display 層の [低信心] ラベルを駆動する。
     """
+    doc_metadata = raw.get("metadata", {})
+    if "qc" not in doc_metadata:
+        return "high", "ok", 1.0
+
     info_loss = None
     try:
-        info_loss = raw["metadata"]["qc"]["estimated_info_loss_rate"]
+        info_loss = doc_metadata["qc"]["estimated_info_loss_rate"]
     except (KeyError, TypeError):
         pass
-    weight = _continuous_weight(info_loss)
-    # 全掃描文件降權（OCR 準確率低於正常文件）
-    if raw.get("metadata", {}).get("extractor_metadata", {}).get("is_fully_scanned"):
-        weight = weight * 0.8
-    if weight >= 0.97:
-        level = "high"
-    elif weight >= 0.80:
-        level = "medium"
+
+    is_fully_scanned = doc_metadata.get("extractor_metadata", {}).get("is_fully_scanned", False)
+
+    if is_fully_scanned or (info_loss is not None and info_loss > _INFO_LOSS_HIGH):
+        level, flag = "low", "low"
+    elif info_loss is not None and info_loss > _INFO_LOSS_LOW:
+        level, flag = "medium", "ok"
     else:
-        level = "low"
-    flag = "low" if level == "low" else "ok"
-    return level, flag, weight
+        level, flag = "high", "ok"
+
+    return level, flag, 1.0
 
 
 def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metadata: dict | None = None, confidence: tuple | None = None) -> list[RetrievalUnit]:
@@ -598,7 +602,7 @@ def _table_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metadata:
         conf = assess(t)
         level = conf["level"]
         flag = "low" if level == "low" else "ok"
-        weight = _continuous_weight(conf["score"])
+        weight = 1.0
         json_out = to_json(lt)
         json_out["type"] = "table"
         json_out["merge_rate"] = merge_rate
@@ -800,7 +804,7 @@ def _high_graphics_path(
             display_markdown=f"[page_{page}]({source_path})" if source_path else "",
             confidence_level=confidence_level,
             quality_flag=quality_flag,
-            retrieval_weight=retrieval_weight * 0.9,  # 輕微降權，因無直接文字
+            retrieval_weight=retrieval_weight,
             source_pages=[page],
             row_texts=[],
             doc_metadata=doc_metadata or {},

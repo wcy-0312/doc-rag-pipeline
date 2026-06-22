@@ -25,7 +25,8 @@ class RankedResult:
     rerank_score: float = 0.0
 
 
-def _make_para(chunk_id, rerank_score, content="default test content", retrieval_weight=0.8, source_pages=None):
+def _make_para(chunk_id, rerank_score, content="default test content",
+               retrieval_weight=1.0, source_pages=None, metadata=None):
     return RankedResult(
         chunk_id=chunk_id,
         chunk_type="paragraph",
@@ -35,7 +36,7 @@ def _make_para(chunk_id, rerank_score, content="default test content", retrieval
         rrf_score=rerank_score,
         retrieval_weight=retrieval_weight,
         display_markdown=content,
-        metadata={},
+        metadata=metadata or {},
         source_tool="docling",
         source_pages=source_pages or [1],
         rerank_score=rerank_score,
@@ -72,19 +73,27 @@ def test_token_budget_drops_low_score_chunks():
     assert "c3" not in chunk_ids
 
 
-def test_low_confidence_prefix():
-    r = _make_para("c1", rerank_score=0.9, content="some meaningful text here", retrieval_weight=0.4)
-
+def test_pack_low_confidence_label():
+    """quality_flag='low' → [低信心] prefix in packed content."""
+    r = _make_para(
+        "c1", rerank_score=0.9,
+        content="some meaningful text here",
+        retrieval_weight=1.0,          # weight no longer drives label
+        metadata={"quality_flag": "low"},
+    )
     evidence_list, _ = pack([r])
-
     assert evidence_list[0].content.startswith("[低信心] ")
 
 
-def test_high_confidence_no_prefix():
-    r = _make_para("c1", rerank_score=0.9, content="some meaningful text here", retrieval_weight=0.6)
-
+def test_pack_normal_confidence_no_label():
+    """quality_flag absent → no [低信心] prefix."""
+    r = _make_para(
+        "c1", rerank_score=0.9,
+        content="some meaningful text here",
+        retrieval_weight=1.0,
+        metadata={},
+    )
     evidence_list, _ = pack([r])
-
     assert not evidence_list[0].content.startswith("[低信心]")
 
 
@@ -166,7 +175,7 @@ def test_evidence_map_structure():
     assert evidence_map["E1"]["chunk_id"] == "c1"
     assert evidence_map["E1"]["source_pages"] == [1, 2]
     assert evidence_map["E1"]["source_tool"] == "docling"
-    assert evidence_map["E1"]["retrieval_weight"] == 0.8
+    assert evidence_map["E1"]["retrieval_weight"] == 1.0
 
     assert evidence_map["E2"]["chunk_id"] == "c2"
     assert evidence_map["E2"]["source_pages"] == [3]

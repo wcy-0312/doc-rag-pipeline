@@ -3,7 +3,7 @@ import pytest
 from layer_b.models import IRCell, IRTable, QC, RetrievalUnit
 from layer_b.table import build_header_paths, to_markdown
 from layer_b.pipeline import assess
-from layer_b.pipeline import process_document, _continuous_weight
+from layer_b.pipeline import process_document, _continuous_weight, _doc_confidence
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -234,6 +234,39 @@ def test_continuous_weight():
     assert _continuous_weight(None) == 0.7
     assert _continuous_weight(0.0) == 1.0
     assert _continuous_weight(1.5) == 0.0  # clip to 0
+
+
+def test_doc_confidence_weight_always_one_no_qc():
+    """PDF path: no qc key → weight must be 1.0."""
+    raw = {"metadata": {}}
+    level, flag, weight = _doc_confidence(raw)
+    assert weight == 1.0
+    assert level == "high"
+    assert flag == "ok"
+
+
+def test_doc_confidence_weight_always_one_with_high_loss():
+    """Word/DI path: high info_loss → level=low, flag=low, but weight still 1.0."""
+    from layer_b.pipeline import _doc_confidence
+    raw = {"metadata": {"qc": {"estimated_info_loss_rate": 0.20, "qc_level": "danger"}}}
+    level, flag, weight = _doc_confidence(raw)
+    assert weight == 1.0
+    assert level == "low"
+    assert flag == "low"
+
+
+def test_doc_confidence_fully_scanned_is_low():
+    """Fully scanned doc → level=low, flag=low regardless of info_loss."""
+    raw = {
+        "metadata": {
+            "qc": {"estimated_info_loss_rate": 0.01},
+            "extractor_metadata": {"is_fully_scanned": True},
+        }
+    }
+    level, flag, weight = _doc_confidence(raw)
+    assert level == "low"
+    assert flag == "low"
+    assert weight == 1.0
 
 
 

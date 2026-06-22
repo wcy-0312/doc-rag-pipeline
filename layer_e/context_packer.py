@@ -46,7 +46,7 @@ def pack(results: list, max_tokens: int = 12000) -> Tuple[List[EvidenceItem], Di
 
             parent = chunk_id_to_result[parent_id]
             content = parent.display_markdown
-            if r.retrieval_weight < 0.5:
+            if r.metadata.get("quality_flag") == "low":
                 content = "[低信心] " + content
 
             if len(content.strip()) < 15:
@@ -94,7 +94,7 @@ def pack(results: list, max_tokens: int = 12000) -> Tuple[List[EvidenceItem], Di
                 continue
 
             content = r.display_markdown
-            if r.retrieval_weight < 0.5:
+            if r.metadata.get("quality_flag") == "low":
                 content = "[低信心] " + content
 
             if len(content.strip()) < 15:
