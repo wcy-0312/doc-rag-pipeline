@@ -34,6 +34,22 @@ def _parse_figure_area(source_str: str) -> tuple[int | None, float]:
     return page, 0.0
 
 
+def _build_figure_element_set(figures: list[dict]) -> set[int]:
+    """Return set of paragraph indices referenced in any figure's elements[].
+
+    These paragraphs are captions/labels belonging to figures and must not
+    be emitted again as standalone paragraph RetrievalUnits.
+    """
+    indices: set[int] = set()
+    for fig in figures:
+        for elem_ref in fig.get("elements", []):
+            try:
+                indices.add(int(str(elem_ref).split("/")[-1]))
+            except (ValueError, IndexError):
+                pass
+    return indices
+
+
 def _parse_source_page(source_str: str) -> int | None:
     m = _SOURCE_PAGE_RE.match(str(source_str or ""))
     return int(m.group(1)) if m else None
@@ -239,13 +255,18 @@ def _is_formatting_artifact(content: str) -> bool:
 MIN_PARA_LEN = 12
 
 
-def _extract_azure_cu_paragraphs(data: dict) -> list[dict]:
+def _extract_azure_cu_paragraphs(
+    data: dict,
+    skip_indices: set[int] | None = None,
+) -> list[dict]:
     """Extract paragraph candidates from azure_cu data.paragraphs[]."""
     EXCLUDED_ROLES = {"pageHeader", "pageFooter", "pageNumber"}
     candidates = []
     current_heading = None
 
-    for para in data.get("paragraphs", []):
+    for i, para in enumerate(data.get("paragraphs", [])):
+        if skip_indices and i in skip_indices:
+            continue
         role = para.get("role")
         content = para.get("content", "").strip()
 
@@ -465,7 +486,14 @@ def _doc_confidence(raw: dict) -> tuple[str, str, float]:
     return level, flag, 1.0
 
 
-def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metadata: dict | None = None, confidence: tuple | None = None) -> list[RetrievalUnit]:
+def _paragraph_path(
+    raw: dict,
+    source_tool: str,
+    doc_prefix: str = "",
+    doc_metadata: dict | None = None,
+    confidence: tuple | None = None,
+    figure_element_set: set[int] | None = None,
+) -> list[RetrievalUnit]:
     """Extract paragraph-path RetrievalUnits from raw document data.
 
     Runs in parallel with _table_path(); called by process_document().
@@ -475,7 +503,7 @@ def _paragraph_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metad
     source_tool = _normalize_source_tool(source_tool)
 
     if source_tool == "azure_cu":
-        candidates = _extract_azure_cu_paragraphs(data)
+        candidates = _extract_azure_cu_paragraphs(data, skip_indices=figure_element_set)
     elif source_tool == "azure_di":
         candidates = _extract_azure_di_paragraphs(data)
         candidates = _aggregate_header_cluster(candidates)
@@ -863,9 +891,13 @@ def process_document(raw: dict) -> list[RetrievalUnit]:
     norm_tool = _normalize_source_tool(source_tool)
     confidence = _doc_confidence(raw)
     page_context_map = _build_page_context_map(raw.get("data", {}), norm_tool)
+    figure_element_set = _build_figure_element_set(raw.get("data", {}).get("figures", []))
     units = []
     units.extend(_table_path(raw, source_tool, doc_prefix, doc_metadata))
-    units.extend(_paragraph_path(raw, source_tool, doc_prefix, doc_metadata, confidence))
+    units.extend(_paragraph_path(
+        raw, source_tool, doc_prefix, doc_metadata, confidence,
+        figure_element_set=figure_element_set,
+    ))
     units.extend(_figure_path(raw, source_tool, doc_prefix, doc_metadata, confidence, page_context_map))
     _covered = {p for u in units for p in (u.source_pages or [])}
     units.extend(_high_graphics_path(raw, doc_prefix, norm_tool, doc_metadata, confidence, page_context_map, covered_pages=_covered))

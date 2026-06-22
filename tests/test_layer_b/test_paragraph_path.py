@@ -4,6 +4,7 @@ from layer_b.pipeline import (
     _para_has_handwriting,
     _process_checkbox_content,
     _is_formatting_artifact,
+    _build_figure_element_set,
     _extract_azure_cu_paragraphs,
     _extract_azure_di_paragraphs,
     _extract_docling_paragraphs,
@@ -171,6 +172,41 @@ def test_extract_azure_cu_paragraphs_heading_breadcrumb():
     assert len(candidates) == 2
     assert candidates[0]["heading_breadcrumb"] is None  # sectionHeading 自己不加 breadcrumb
     assert candidates[1]["heading_breadcrumb"] == "Leads"
+
+
+# ── 4b. _build_figure_element_set() + skip_indices ───────────────────────────
+
+def test_build_figure_element_set_basic():
+    figures = [
+        {"elements": ["/paragraphs/3", "/paragraphs/7"]},
+        {"elements": ["/paragraphs/7", "/paragraphs/12"]},
+    ]
+    result = _build_figure_element_set(figures)
+    assert result == {3, 7, 12}
+
+
+def test_build_figure_element_set_empty():
+    assert _build_figure_element_set([]) == set()
+    assert _build_figure_element_set([{"elements": []}]) == set()
+
+
+def test_extract_azure_cu_paragraphs_skips_figure_elements():
+    """Paragraphs referenced in figures[].elements[] must not appear as candidates."""
+    data = {
+        "paragraphs": [
+            {"content": "chapter heading", "role": "sectionHeading",
+             "source": "D(1,0,0,1,0,1,1,0,1)", "spans": []},
+            {"content": "caption for figure 1", "role": None,
+             "source": "D(1,0,0,1,0,1,1,0,1)", "spans": []},
+            {"content": "Normal paragraph with enough text to pass filter.",
+             "role": None, "source": "D(1,0,0,1,0,1,1,0,1)", "spans": []},
+        ],
+    }
+    # paragraph index 1 is a figure element — should be skipped
+    candidates = _extract_azure_cu_paragraphs(data, skip_indices={1})
+    contents = [c["content"] for c in candidates]
+    assert "caption for figure 1" not in contents
+    assert "Normal paragraph with enough text to pass filter." in contents
 
 
 # ── 5. _extract_azure_di_paragraphs() ────────────────────────────────────────
