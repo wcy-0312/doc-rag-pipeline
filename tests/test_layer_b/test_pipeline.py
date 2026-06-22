@@ -247,7 +247,6 @@ def test_doc_confidence_weight_always_one_no_qc():
 
 def test_doc_confidence_weight_always_one_with_high_loss():
     """Word/DI path: high info_loss → level=low, flag=low, but weight still 1.0."""
-    from layer_b.pipeline import _doc_confidence
     raw = {"metadata": {"qc": {"estimated_info_loss_rate": 0.20, "qc_level": "danger"}}}
     level, flag, weight = _doc_confidence(raw)
     assert weight == 1.0
@@ -268,6 +267,18 @@ def test_doc_confidence_fully_scanned_is_low():
     assert flag == "low"
     assert weight == 1.0
 
+
+def test_doc_confidence_fully_scanned_no_qc_key():
+    """Fully scanned doc with no qc key must still return level=low, not high."""
+    raw = {
+        "metadata": {
+            "extractor_metadata": {"is_fully_scanned": True},
+        }
+    }
+    level, flag, weight = _doc_confidence(raw)
+    assert level == "low"
+    assert flag == "low"
+    assert weight == 1.0
 
 
 # ── Test ③b: vision_description prepended to embedding_text ──────────────────

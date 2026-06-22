@@ -438,9 +438,14 @@ def _doc_confidence(raw: dict) -> tuple[str, str, float]:
     """Return (confidence_level, quality_flag, retrieval_weight).
 
     retrieval_weight 固定 1.0 — 品質不影響 retrieval 排名。
-    quality_flag="low" が display 層の [低信心] ラベルを駆動する。
+    quality_flag="low" 是 display 層 [低信心] 標籤的唯一觸發條件。
     """
     doc_metadata = raw.get("metadata", {})
+
+    is_fully_scanned = doc_metadata.get("extractor_metadata", {}).get("is_fully_scanned", False)
+    if is_fully_scanned:
+        return "low", "low", 1.0
+
     if "qc" not in doc_metadata:
         return "high", "ok", 1.0
 
@@ -450,9 +455,7 @@ def _doc_confidence(raw: dict) -> tuple[str, str, float]:
     except (KeyError, TypeError):
         pass
 
-    is_fully_scanned = doc_metadata.get("extractor_metadata", {}).get("is_fully_scanned", False)
-
-    if is_fully_scanned or (info_loss is not None and info_loss > _INFO_LOSS_HIGH):
+    if info_loss is not None and info_loss > _INFO_LOSS_HIGH:
         level, flag = "low", "low"
     elif info_loss is not None and info_loss > _INFO_LOSS_LOW:
         level, flag = "medium", "ok"
