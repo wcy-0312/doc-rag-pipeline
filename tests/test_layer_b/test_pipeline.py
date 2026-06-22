@@ -4,6 +4,7 @@ from layer_b.models import IRCell, IRTable, QC, RetrievalUnit
 from layer_b.table import build_header_paths, to_markdown
 from layer_b.pipeline import assess
 from layer_b.pipeline import process_document, _continuous_weight, _doc_confidence
+from layer_b.pipeline import _build_section_path_map, _extract_azure_cu_paragraphs
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -352,6 +353,66 @@ def test_figure_path_azure_cu():
     assert "cT2N1M0 治療流程" in f.embedding_text
     assert "新輔助化療建議" in f.embedding_text
     assert f.structured_json["area"] > 0.5
+
+
+# ── Test: _build_section_path_map (Task 3) ────────────────────────────────────
+
+def test_build_section_path_map_flat():
+    """Single-level sections → paragraph gets one-element path."""
+    sections = [
+        {
+            "title": "第一章 流行病學",
+            "elements": ["/paragraphs/0", "/paragraphs/1"],
+        },
+        {
+            "title": "第二章 治療",
+            "elements": ["/paragraphs/2"],
+        },
+    ]
+    result = _build_section_path_map(sections)
+    assert result[0] == ["第一章 流行病學"]
+    assert result[1] == ["第一章 流行病學"]
+    assert result[2] == ["第二章 治療"]
+
+
+def test_build_section_path_map_nested():
+    """Nested sections → paragraph gets full path list."""
+    sections = [
+        {
+            "title": "",                              # root, no title
+            "elements": ["/sections/1", "/sections/2"],
+        },
+        {
+            "title": "第三章 治療",
+            "elements": ["/paragraphs/10", "/sections/3"],
+        },
+        {
+            "title": "第一章",
+            "elements": ["/paragraphs/5"],
+        },
+        {
+            "title": "3.1 一線化療",
+            "elements": ["/paragraphs/12"],
+        },
+    ]
+    result = _build_section_path_map(sections)
+    assert result[5] == ["第一章"]
+    assert result[10] == ["第三章 治療"]
+    assert result[12] == ["第三章 治療", "3.1 一線化療"]
+    assert 0 not in result   # para 0 not referenced by any section
+
+
+def test_extract_azure_cu_paragraphs_uses_section_map():
+    """Paragraphs use full section path when section_path_map provided."""
+    data = {
+        "paragraphs": [
+            {"content": "劑量每日 5mg，第 1-5 天給藥，每 28 天一個療程。",
+             "role": None, "source": "D(1,0,0,1,0,1,1,0,1)", "spans": []},
+        ],
+    }
+    section_path_map = {0: ["第三章 治療", "3.1 一線化療"]}
+    candidates = _extract_azure_cu_paragraphs(data, section_path_map=section_path_map)
+    assert candidates[0]["heading_breadcrumb"] == "第三章 治療 > 3.1 一線化療"
 
 
 if __name__ == "__main__":

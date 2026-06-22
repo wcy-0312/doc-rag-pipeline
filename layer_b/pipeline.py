@@ -50,6 +50,52 @@ def _build_figure_element_set(figures: list[dict]) -> set[int]:
     return indices
 
 
+def _build_section_path_map(sections: list[dict]) -> dict[int, list[str]]:
+    """Build {paragraph_index: [title, subtitle, ...]} from sections[] tree.
+
+    Traverses the tree recursively. A paragraph's breadcrumb is the ordered
+    list of non-empty section titles from the nearest root down to the section
+    that directly references it. If a paragraph appears in multiple sections
+    the first encounter wins.
+    """
+    section_by_idx: dict[int, dict] = {i: s for i, s in enumerate(sections)}
+    result: dict[int, list[str]] = {}
+
+    def _visit(sec_idx: int, path: list[str]) -> None:
+        sec = section_by_idx.get(sec_idx)
+        if sec is None:
+            return
+        title = (sec.get("title") or "").strip()
+        current_path = path + [title] if title else list(path)
+        for elem_ref in sec.get("elements", []):
+            try:
+                parts = str(elem_ref).strip("/").split("/")
+                kind, idx = parts[-2], int(parts[-1])
+            except (IndexError, ValueError):
+                continue
+            if kind == "paragraphs" and idx not in result:
+                result[idx] = current_path
+            elif kind == "sections":
+                _visit(idx, current_path)
+
+    # Identify root sections — those NOT referenced as a child by any other section
+    child_indices: set[int] = set()
+    for sec in sections:
+        for elem_ref in sec.get("elements", []):
+            try:
+                parts = str(elem_ref).strip("/").split("/")
+                if parts[-2] == "sections":
+                    child_indices.add(int(parts[-1]))
+            except (IndexError, ValueError):
+                pass
+
+    for i in range(len(sections)):
+        if i not in child_indices:
+            _visit(i, [])
+
+    return result
+
+
 def _parse_source_page(source_str: str) -> int | None:
     m = _SOURCE_PAGE_RE.match(str(source_str or ""))
     return int(m.group(1)) if m else None
@@ -258,6 +304,7 @@ MIN_PARA_LEN = 12
 def _extract_azure_cu_paragraphs(
     data: dict,
     skip_indices: set[int] | None = None,
+    section_path_map: dict[int, list[str]] | None = None,
 ) -> list[dict]:
     """Extract paragraph candidates from azure_cu data.paragraphs[]."""
     EXCLUDED_ROLES = {"pageHeader", "pageFooter", "pageNumber"}
@@ -295,12 +342,18 @@ def _extract_azure_cu_paragraphs(
                 continue
             if _VERSION_HISTORY_RE.match(content):
                 continue
+            # Prefer full section path from sections[] tree; fall back to tracked heading
+            if section_path_map is not None and i in section_path_map:
+                path = section_path_map[i]
+                hb = " > ".join(p for p in path if p) or None
+            else:
+                hb = current_heading
             candidates.append({
                 "content": content,
                 "page": page,
                 "role": None,
                 "label": None,
-                "heading_breadcrumb": current_heading,
+                "heading_breadcrumb": hb,
                 "excluded_items": [],
                 "spans": spans,
             })
@@ -493,6 +546,7 @@ def _paragraph_path(
     doc_metadata: dict | None = None,
     confidence: tuple | None = None,
     figure_element_set: set[int] | None = None,
+    section_path_map: dict[int, list[str]] | None = None,
 ) -> list[RetrievalUnit]:
     """Extract paragraph-path RetrievalUnits from raw document data.
 
@@ -503,7 +557,11 @@ def _paragraph_path(
     source_tool = _normalize_source_tool(source_tool)
 
     if source_tool == "azure_cu":
-        candidates = _extract_azure_cu_paragraphs(data, skip_indices=figure_element_set)
+        candidates = _extract_azure_cu_paragraphs(
+            data,
+            skip_indices=figure_element_set,
+            section_path_map=section_path_map,
+        )
     elif source_tool == "azure_di":
         candidates = _extract_azure_di_paragraphs(data)
         candidates = _aggregate_header_cluster(candidates)
@@ -892,11 +950,14 @@ def process_document(raw: dict) -> list[RetrievalUnit]:
     confidence = _doc_confidence(raw)
     page_context_map = _build_page_context_map(raw.get("data", {}), norm_tool)
     figure_element_set = _build_figure_element_set(raw.get("data", {}).get("figures", []))
+    sections = raw.get("data", {}).get("sections", [])
+    section_path_map = _build_section_path_map(sections) if sections else {}
     units = []
     units.extend(_table_path(raw, source_tool, doc_prefix, doc_metadata))
     units.extend(_paragraph_path(
         raw, source_tool, doc_prefix, doc_metadata, confidence,
         figure_element_set=figure_element_set,
+        section_path_map=section_path_map,
     ))
     units.extend(_figure_path(raw, source_tool, doc_prefix, doc_metadata, confidence, page_context_map))
     _covered = {p for u in units for p in (u.source_pages or [])}
