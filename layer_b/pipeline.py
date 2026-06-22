@@ -989,6 +989,7 @@ def _high_graphics_path(
 
 
 def _document_path(raw: dict) -> list[RetrievalUnit]:
+    doc_metadata = _build_doc_metadata(raw)
     docs = adapt(raw, "vision_llm")
     units: list[RetrievalUnit] = []
     for doc in docs:
@@ -1005,7 +1006,7 @@ def _document_path(raw: dict) -> list[RetrievalUnit]:
                     display_markdown=display,
                     confidence_level="medium",
                     quality_flag="ok",
-                    retrieval_weight=_continuous_weight(None),
+                    retrieval_weight=1.0,
                     source_pages=[],
                     doc_id=doc.doc_id,
                     section_id=section.section_id,
@@ -1016,6 +1017,7 @@ def _document_path(raw: dict) -> list[RetrievalUnit]:
                     element_type=elem.get("type", "text"),
                     entities=elem.get("entities", {}),
                     document_signals=elem.get("document_signals", []),
+                    doc_metadata=doc_metadata,
                 ))
     return units
 

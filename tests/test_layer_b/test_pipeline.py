@@ -122,7 +122,7 @@ def test_process_document_vision_llm():
         assert u.source_tool == "vision_llm"
         assert u.confidence_level == "medium"
         assert u.quality_flag == "ok"
-        assert u.retrieval_weight == 0.7
+        assert u.retrieval_weight == 1.0
         assert u.entities is not None
         assert u.document_signals is not None
         assert "護理評估" in u.display_markdown
@@ -602,6 +602,22 @@ def test_table_unit_quality_flag_low_for_fully_scanned():
         assert u.confidence_level == "low"
 
 
+def test_document_path_retrieval_weight_is_1():
+    import inspect
+    from layer_b.pipeline import _document_path
+    src = inspect.getsource(_document_path)
+    assert "_continuous_weight" not in src, "_document_path must not call _continuous_weight"
+    assert "retrieval_weight=1.0" in src, "_document_path must use retrieval_weight=1.0"
+
+
+def test_document_path_passes_doc_metadata():
+    import inspect
+    from layer_b.pipeline import _document_path
+    src = inspect.getsource(_document_path)
+    assert "_build_doc_metadata" in src, "_document_path must call _build_doc_metadata"
+    assert "doc_metadata=doc_metadata" in src, "_document_path must pass doc_metadata to RetrievalUnit"
+
+
 if __name__ == "__main__":
     test_process_document_table_path()
     test_process_document_vision_llm()
@@ -614,4 +630,6 @@ if __name__ == "__main__":
     test_continuous_weight()
     test_embedding_provider_protocol()
     test_process_document_vision_description_prepended()
+    test_document_path_retrieval_weight_is_1()
+    test_document_path_passes_doc_metadata()
     print("All pipeline tests passed.")
