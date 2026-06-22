@@ -377,6 +377,16 @@ class TestGetDocumentIndex:
         assert chunk_type_cond.match.value == "document_index"
         assert call_kwargs["with_vectors"] is False
 
+        # Fix 6: chunk_id must use exact MatchValue, not substring MatchText
+        from qdrant_client.models import MatchValue
+        chunk_id_cond = next(
+            c for c in scroll_filter.must if c.key == "chunk_id"
+        )
+        assert isinstance(chunk_id_cond.match, MatchValue), (
+            f"Expected MatchValue for chunk_id, got {type(chunk_id_cond.match)}"
+        )
+        assert chunk_id_cond.match.value == "my_doc__document_index"
+
     def test_returns_none_when_not_found(self):
         mock_client = MagicMock()
         mock_client.scroll.return_value = ([], None)

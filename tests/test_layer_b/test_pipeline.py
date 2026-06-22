@@ -4,7 +4,7 @@ from layer_b.models import IRCell, IRTable, QC, RetrievalUnit
 from layer_b.table import build_header_paths, to_markdown
 from layer_b.pipeline import assess
 from layer_b.pipeline import process_document, _continuous_weight, _doc_confidence
-from layer_b.pipeline import _build_section_path_map, _extract_azure_cu_paragraphs, extract_document_index
+from layer_b.pipeline import _build_section_path_map, _extract_azure_cu_paragraphs, extract_document_index, _build_figure_element_set
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -459,6 +459,151 @@ def test_extract_document_index_nested():
 def test_extract_document_index_no_sections():
     assert extract_document_index({"data": {}}) is None
     assert extract_document_index({"data": {"sections": []}}) is None
+
+
+# ── Fix 1: _doc_confidence handles string estimated_info_loss_rate ────────────
+
+def test_doc_confidence_string_info_loss_no_exception():
+    """_doc_confidence must not raise TypeError when info_loss is stored as a string."""
+    raw = {"metadata": {"qc": {"estimated_info_loss_rate": "0.15"}}}
+    level, flag, weight = _doc_confidence(raw)
+    assert level in ("high", "medium", "low")
+    assert flag in ("ok", "low")
+    assert weight == 1.0
+    # "0.15" > _INFO_LOSS_HIGH (0.10) → should be low
+    assert level == "low"
+    assert flag == "low"
+
+
+def test_doc_confidence_string_info_loss_medium():
+    """String info_loss within medium band returns medium level."""
+    raw = {"metadata": {"qc": {"estimated_info_loss_rate": "0.05"}}}
+    level, flag, weight = _doc_confidence(raw)
+    assert level == "medium"
+    assert flag == "ok"
+
+
+# ── Fix 2: _build_section_path_map cycle detection ────────────────────────────
+
+def test_build_section_path_map_self_referencing_no_recursion():
+    """A self-referencing section must not raise RecursionError."""
+    # Section 0 references itself as a child → infinite recursion without fix
+    sections = [
+        {
+            "title": "循環節",
+            "elements": ["/sections/0", "/paragraphs/0"],
+        }
+    ]
+    result = _build_section_path_map(sections)
+    # Must return without crashing; paragraph 0 may or may not be mapped
+    assert isinstance(result, dict)
+
+
+def test_build_section_path_map_mutual_cycle_no_recursion():
+    """Sections that reference each other in a cycle must not raise RecursionError."""
+    sections = [
+        {"title": "A", "elements": ["/sections/1"]},
+        {"title": "B", "elements": ["/sections/0", "/paragraphs/5"]},
+    ]
+    result = _build_section_path_map(sections)
+    assert isinstance(result, dict)
+
+
+# ── Fix 3: extract_document_index cycle detection ────────────────────────────
+
+def test_extract_document_index_self_referencing_no_recursion():
+    """A self-referencing section must not raise RecursionError."""
+    raw = {
+        "data": {
+            "sections": [
+                {"title": "循環", "elements": ["/sections/0"]},
+            ]
+        }
+    }
+    result = extract_document_index(raw)
+    # Must return without crashing
+    assert result is None or isinstance(result, dict)
+
+
+def test_extract_document_index_mutual_cycle_no_recursion():
+    """Mutually referencing sections must not raise RecursionError."""
+    raw = {
+        "data": {
+            "sections": [
+                {"title": "A", "elements": ["/sections/1"]},
+                {"title": "B", "elements": ["/sections/0"]},
+            ]
+        }
+    }
+    result = extract_document_index(raw)
+    assert result is None or isinstance(result, dict)
+
+
+# ── Fix 4: _build_figure_element_set ignores non-paragraph refs ───────────────
+
+def test_build_figure_element_set_ignores_table_refs():
+    """Only /paragraphs/N refs should be included; /tables/N must be ignored."""
+    figures = [
+        {
+            "elements": [
+                "/paragraphs/3",
+                "/tables/3",
+                "/figures/2",
+                "/paragraphs/7",
+            ]
+        }
+    ]
+    result = _build_figure_element_set(figures)
+    assert result == {3, 7}
+
+
+def test_build_figure_element_set_empty():
+    assert _build_figure_element_set([]) == set()
+
+
+def test_build_figure_element_set_no_paragraph_refs():
+    figures = [{"elements": ["/tables/0", "/figures/1"]}]
+    result = _build_figure_element_set(figures)
+    assert result == set()
+
+
+# ── Fix 5: _table_path propagates is_fully_scanned to table quality_flag ──────
+
+def _azure_cu_raw_with_table_and_scanned_flag(cells: list[dict]) -> dict:
+    """Build a minimal azure_cu payload with is_fully_scanned=True."""
+    return {
+        "extractor_metadata": {"tool": "azure_content_understanding"},
+        "metadata": {
+            "qc": {"empty_cell_rate": 0.0, "qc_level": "ok", "warnings": []},
+            "extractor_metadata": {"is_fully_scanned": True},
+        },
+        "data": {
+            "tables": [{"cells": cells}],
+            "page_images": {},
+        },
+    }
+
+
+def test_table_unit_quality_flag_low_for_fully_scanned():
+    """Table units from a fully-scanned document must have quality_flag='low'."""
+    cells = [
+        {"rowIndex": 0, "columnIndex": 0, "rowSpan": 1, "columnSpan": 1,
+         "content": "護理問題", "kind": "columnHeader", "confidence": 0.99,
+         "boundingRegions": [{"pageNumber": 1, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}]},
+        {"rowIndex": 1, "columnIndex": 0, "rowSpan": 1, "columnSpan": 1,
+         "content": "疼痛管理", "kind": "content", "confidence": 0.95,
+         "boundingRegions": [{"pageNumber": 1, "polygon": [0, 1, 1, 1, 1, 2, 0, 2]}]},
+    ]
+    raw = _azure_cu_raw_with_table_and_scanned_flag(cells)
+    units = process_document(raw)
+
+    table_units = [u for u in units if u.structured_json.get("type") == "table"]
+    assert len(table_units) >= 1, "Expected at least 1 table unit"
+    for u in table_units:
+        assert u.quality_flag == "low", (
+            f"Expected quality_flag='low' for fully-scanned doc, got {u.quality_flag!r}"
+        )
+        assert u.confidence_level == "low"
 
 
 if __name__ == "__main__":

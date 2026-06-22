@@ -35,20 +35,20 @@ def _parse_figure_area(source_str: str) -> tuple[int | None, float]:
 
 
 def _build_figure_element_set(figures: list[dict]) -> set[int]:
-    """Return set of paragraph indices (integers) referenced in any figure's elements[].
+    """Return set of paragraph indices referenced in any figure's elements[].
 
-    Parses each element ref string (e.g. '/paragraphs/3') and extracts the
-    trailing integer index.  The returned set[int] contains those indices so
-    that _paragraph_path() can skip paragraphs that are captions/labels
-    already owned by a figure and must not be emitted as standalone
-    RetrievalUnits.
+    Parses element ref strings of the form "/paragraphs/N" and returns only
+    paragraph indices. Non-paragraph refs ("/tables/N", "/figures/N") are
+    ignored to avoid silently skipping valid paragraphs.
     """
     indices: set[int] = set()
     for fig in figures:
         for elem_ref in fig.get("elements", []):
             try:
-                indices.add(int(str(elem_ref).split("/")[-1]))
-            except (ValueError, IndexError):
+                parts = str(elem_ref).strip("/").split("/")
+                if parts[-2] == "paragraphs":
+                    indices.add(int(parts[-1]))
+            except (IndexError, ValueError):
                 pass
     return indices
 
@@ -63,8 +63,12 @@ def _build_section_path_map(sections: list[dict]) -> dict[int, list[str]]:
     """
     section_by_idx: dict[int, dict] = {i: s for i, s in enumerate(sections)}
     result: dict[int, list[str]] = {}
+    visited: set[int] = set()
 
     def _visit(sec_idx: int, path: list[str]) -> None:
+        if sec_idx in visited:
+            return
+        visited.add(sec_idx)
         sec = section_by_idx.get(sec_idx)
         if sec is None:
             return
@@ -114,8 +118,12 @@ def extract_document_index(raw: dict) -> dict | None:
         return None
 
     section_by_idx: dict[int, dict] = {i: s for i, s in enumerate(sections)}
+    visited: set[int] = set()
 
     def _node(sec_idx: int) -> dict | None:
+        if sec_idx in visited:
+            return None
+        visited.add(sec_idx)
         sec = section_by_idx.get(sec_idx)
         if sec is None:
             return None
@@ -598,8 +606,9 @@ def _doc_confidence(raw: dict) -> tuple[str, str, float]:
 
     info_loss = None
     try:
-        info_loss = doc_metadata["qc"]["estimated_info_loss_rate"]
-    except (KeyError, TypeError):
+        raw_val = doc_metadata["qc"]["estimated_info_loss_rate"]
+        info_loss = float(raw_val) if raw_val is not None else None
+    except (KeyError, TypeError, ValueError):
         pass
 
     if info_loss is not None and info_loss > _INFO_LOSS_HIGH:
@@ -765,6 +774,10 @@ def _table_path(raw: dict, source_tool: str, doc_prefix: str = "", doc_metadata:
         level = conf["level"]
         flag = "low" if level == "low" else "ok"
         weight = 1.0
+        # Propagate document-level is_fully_scanned to table confidence flag
+        if raw.get("metadata", {}).get("extractor_metadata", {}).get("is_fully_scanned"):
+            level = "low"
+            flag = "low"
         json_out = to_json(lt)
         json_out["type"] = "table"
         json_out["merge_rate"] = merge_rate

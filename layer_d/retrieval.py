@@ -110,7 +110,7 @@ class HybridRetriever:
             collection_name=self.collection_name,
             scroll_filter=Filter(must=[
                 FieldCondition(key="chunk_type", match=MatchValue(value="document_index")),
-                FieldCondition(key="chunk_id", match=MatchText(text=f"{doc_stem}__")),
+                FieldCondition(key="chunk_id", match=MatchValue(value=f"{doc_stem}__document_index")),
             ]),
             limit=1,
             with_payload=True,
