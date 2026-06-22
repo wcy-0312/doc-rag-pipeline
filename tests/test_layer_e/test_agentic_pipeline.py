@@ -200,3 +200,42 @@ def test_no_document_outline_when_retriever_returns_none():
         doc_stem="test_doc",
     )
     assert pipeline._document_outline is None
+
+
+def test_outline_appears_in_llm_messages():
+    """Outline text must be present in the messages passed to generate_with_tools during run()."""
+
+    captured: list = []
+
+    class _CapturingStub(_StubLLMClient):
+        def generate_with_tools(self, messages, tools):
+            captured.append(list(messages))
+            return super().generate_with_tools(messages, tools)
+
+    mock_retriever = MagicMock()
+    mock_retriever.get_document_index.return_value = {
+        "sections": [
+            {"title": "第一章 流行病學"},
+            {"title": "第三章 治療", "sections": [{"title": "3.1 一線化療"}]},
+        ]
+    }
+
+    pipeline = AgenticPipeline(
+        llm_client=_CapturingStub(),
+        retriever=mock_retriever,
+        pdf_path="/tmp/test.pdf",
+        doc_stem="test_doc",
+    )
+
+    r = _FakeRankedResult(chunk_id="c1")
+    result = pipeline.run("cT2N1M0 治療建議", [r])
+
+    assert isinstance(result, GenerationResult)
+    assert captured, "generate_with_tools was never called"
+    # The first call's messages should contain the outline in the system message
+    first_call_messages = captured[0]
+    system_content = next(
+        m["content"] for m in first_call_messages if m["role"] == "system"
+    )
+    assert "第一章 流行病學" in system_content
+    assert "3.1 一線化療" in system_content

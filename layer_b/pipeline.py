@@ -35,10 +35,13 @@ def _parse_figure_area(source_str: str) -> tuple[int | None, float]:
 
 
 def _build_figure_element_set(figures: list[dict]) -> set[int]:
-    """Return set of paragraph indices referenced in any figure's elements[].
+    """Return set of paragraph indices (integers) referenced in any figure's elements[].
 
-    These paragraphs are captions/labels belonging to figures and must not
-    be emitted again as standalone paragraph RetrievalUnits.
+    Parses each element ref string (e.g. '/paragraphs/3') and extracts the
+    trailing integer index.  The returned set[int] contains those indices so
+    that _paragraph_path() can skip paragraphs that are captions/labels
+    already owned by a figure and must not be emitted as standalone
+    RetrievalUnits.
     """
     indices: set[int] = set()
     for fig in figures:
