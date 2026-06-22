@@ -377,11 +377,12 @@ class RAGPipeline:
 
         _llm = llm_client or self._gen._llm_client
         g_stem = _re_local.sub(r'[^\w\-]', '_', guideline_doc_id) if guideline_doc_id else guideline_doc_id
+        p_stem = _re_local.sub(r'[^\w\-]', '_', patient_doc_stem) if patient_doc_stem else patient_doc_stem
 
         guideline_tree = self._tree_store.load_static(
             g_stem, self._qdrant_client, self._collection_name_ref
         )
-        patient_tree = self._tree_store.load_dynamic(session_id, patient_doc_stem)
+        patient_tree = self._tree_store.load_dynamic(session_id, p_stem)
 
         if guideline_tree is None or patient_tree is None:
             return GenerationResult(

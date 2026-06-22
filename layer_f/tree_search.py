@@ -113,13 +113,13 @@ class TreeSearcher:
         patient_result = self.search(query, patient_tree)
 
         guideline_content = "\n\n".join(
-            f"【{n.title}】\n{n.content}"
+            f"【{n.title}】\n{n.content[:1000]}"
             for n in guideline_result.matched_nodes
             if n.content
         ) or "（無相關章節）"
 
         patient_content = "\n\n".join(
-            f"【{n.title}】\n{n.content}"
+            f"【{n.title}】\n{n.content[:1000]}"
             for n in patient_result.matched_nodes
             if n.content
         ) or "（無相關章節）"
