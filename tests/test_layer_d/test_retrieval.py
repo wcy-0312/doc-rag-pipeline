@@ -350,3 +350,40 @@ class TestDetectDocs:
         assert f.must[0].key == "chunk_id"
 
 
+# ---------------------------------------------------------------------------
+# get_document_index
+# ---------------------------------------------------------------------------
+
+class TestGetDocumentIndex:
+    def test_returns_index_dict_when_found(self):
+        expected_index = {"sections": [{"title": "第一章"}]}
+
+        point = MagicMock()
+        point.payload = {"document_index": expected_index}
+
+        mock_client = MagicMock()
+        mock_client.scroll.return_value = ([point], None)
+
+        retriever = HybridRetriever(client=mock_client)
+        result = retriever.get_document_index("my_doc")
+
+        assert result == expected_index
+
+        call_kwargs = mock_client.scroll.call_args.kwargs
+        scroll_filter = call_kwargs["scroll_filter"]
+        chunk_type_cond = next(
+            c for c in scroll_filter.must if c.key == "chunk_type"
+        )
+        assert chunk_type_cond.match.value == "document_index"
+        assert call_kwargs["with_vectors"] is False
+
+    def test_returns_none_when_not_found(self):
+        mock_client = MagicMock()
+        mock_client.scroll.return_value = ([], None)
+
+        retriever = HybridRetriever(client=mock_client)
+        result = retriever.get_document_index("missing_doc")
+
+        assert result is None
+
+
