@@ -279,17 +279,19 @@ class RAGPipeline:
         llm_client:
             LLM client for generating node summaries. If None, summaries are empty.
         """
+        if pdf_path is None:
+            raise ValueError(
+                "pdf_path is required: every tree must be backed by its source PDF. "
+                "Pass the absolute path to the original PDF file."
+            )
         file_name = raw_document.get("metadata", {}).get("file_name") or doc_id
         # NFKC: map CJK compatibility ideographs (e.g. U+F9C1) to canonical form
         doc_stem = _re.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', file_name))
+        self._tree_pdf_paths[doc_stem] = pdf_path
 
         tree = _build_tree_from_raw(raw_document, llm_client=llm_client)
         if tree is None:
             return None
-
-        if pdf_path and static:
-            pdf_stem = _re.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', file_name))
-            self._tree_pdf_paths[pdf_stem] = pdf_path
 
         if static:
             self._ingester.create_collection_if_not_exists()
@@ -369,10 +371,10 @@ class RAGPipeline:
         vision_dpi: int = 100,
         patient_context: str = "",
     ) -> "GenerationResult":
-        """Vision-first synthesis shared by query_tree and query_tree_agentic.
+        """Vision synthesis: render PDF pages for matched nodes, call multimodal LLM.
 
-        Renders PDF pages for matched nodes if a PDF path is registered for any
-        of the given stems. Falls back to text-only synthesis otherwise.
+        Returns abstain GenerationResult if no PDF pages are available (design violation:
+        build_tree() now requires pdf_path, so this should never happen in production).
         """
         from layer_f.page_renderer import render_pages
         from layer_e.models import GenerationResult, ClaimCitation
@@ -384,119 +386,39 @@ class RAGPipeline:
             if pdf_path_val and pages:
                 all_images.extend(render_pages(pdf_path_val, pages, dpi=vision_dpi))
 
-        if all_images:
-            node_text = "\n\n".join(
-                f"【{n.title}】\n{n.content[:500]}"
-                for n in all_nodes if n.content
-            ) or "（無文字摘要）"
-            vision_query = (
-                f"{query}\n\n【病人資料摘要】\n{patient_context}"
-                if patient_context else query
-            )
-            vision_prompt = _VISION_USER_TEMPLATE.format(
-                query=vision_query,
-                node_text=node_text,
-            )
-            answer = llm.generate_text_multimodal(
-                vision_prompt, all_images, system=_VISION_SYSTEM,
-            )
-            return GenerationResult(
-                answer=answer,
-                claims=[ClaimCitation(text=answer, citations=[])],
-                evidence_map={},
-                unsupported_claims=[],
-                abstain=False,
-                abstain_reason=None,
-                safety_verdict="safe",
-                steps_log=[],
-            )
-
-        # Text fallback: patient context path
-        if patient_context:
-            guideline_text = "\n\n".join(
-                f"【{n.title}】\n{n.content[:1000]}"
-                for n in all_nodes if n.content
-            ) or "（無相關章節）"
-            synthesis_prompt = _AGENTIC_SYNTHESIS_TEMPLATE.format(
-                query=query,
-                patient_context=patient_context[:2000],
-                guideline_content=guideline_text,
-            )
-            answer = llm.generate_text(synthesis_prompt, system=_AGENTIC_SYNTHESIS_SYSTEM)
-            return GenerationResult(
-                answer=answer,
-                claims=[ClaimCitation(text=answer, citations=[])],
-                evidence_map={},
-                unsupported_claims=[],
-                abstain=False,
-                abstain_reason=None,
-                safety_verdict="safe",
-                steps_log=[],
-            )
-
-        # Text fallback: no patient context
-        ranked = self._tree_nodes_to_ranked_results(all_nodes)
-        return self._gen.run(query, ranked)
-
-    def query_tree(
-        self,
-        query_text: str,
-        doc_ids: list[str],
-        llm_client=None,
-        vision_dpi: int = 100,
-    ):
-        """Example 1: Top-down tree traversal on one or more static trees.
-
-        Parameters
-        ----------
-        query_text:
-            Natural language question.
-        doc_ids:
-            List of doc_stem keys for static trees to search.
-        llm_client:
-            LLM client for tree traversal. Defaults to self._gen's llm_client.
-
-        Returns
-        -------
-        GenerationResult (same structure as query())
-
-        Note
-        ----
-        When multiple doc_ids are provided and all have registered PDF paths, page images
-        from all matched nodes (across all trees) are pooled and sent to the vision LLM together.
-        Pages are not separated by source document.
-        """
-        _llm = llm_client or self._gen._llm_client
-
-        trees = []
-        for doc_id in doc_ids:
-            raw_stem = _re.sub(r'[^\w\-]', '_', doc_id) if doc_id else doc_id
-            tree = self._tree_store.load_static(
-                raw_stem, self._qdrant_client, self._collection_name_ref
-            )
-            if tree is not None:
-                trees.append(tree)
-
-        if not trees:
-            from layer_e.models import GenerationResult
+        if not all_images:
             return GenerationResult(
                 answer="", claims=[], evidence_map={}, unsupported_claims=[],
-                abstain=True, abstain_reason="找不到對應的文件樹",
+                abstain=True,
+                abstain_reason="無可用的 PDF 頁面圖片（節點無頁碼資訊）",
                 safety_verdict="abstained", steps_log=[],
             )
 
-        searcher = TreeSearcher(_llm)
-        all_nodes = []
-        for tree in trees:
-            result = searcher.search(query_text, tree)
-            all_nodes.extend(result.matched_nodes)
-
-        # Synthesis (vision-first, text fallback)
-        stems = [
-            _re.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', d))
-            for d in doc_ids if d
-        ]
-        return self._synthesise_nodes(query_text, all_nodes, stems, _llm, vision_dpi)
+        node_text = "\n\n".join(
+            f"【{n.title}】\n{n.content[:500]}"
+            for n in all_nodes if n.content
+        ) or "（無文字摘要）"
+        vision_query = (
+            f"{query}\n\n【病人資料摘要】\n{patient_context}"
+            if patient_context else query
+        )
+        vision_prompt = _VISION_USER_TEMPLATE.format(
+            query=vision_query,
+            node_text=node_text,
+        )
+        answer = llm.generate_text_multimodal(
+            vision_prompt, all_images, system=_VISION_SYSTEM,
+        )
+        return GenerationResult(
+            answer=answer,
+            claims=[ClaimCitation(text=answer, citations=[])],
+            evidence_map={},
+            unsupported_claims=[],
+            abstain=False,
+            abstain_reason=None,
+            safety_verdict="safe",
+            steps_log=[],
+        )
 
     def query_tree_cross(
         self,

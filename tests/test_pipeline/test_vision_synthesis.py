@@ -56,40 +56,6 @@ def _make_pipeline(pdf_path: str | None = None):
     return pipeline
 
 
-def test_query_tree_uses_vision_when_pdf_registered(tmp_path):
-    """When PDF path is registered, query_tree renders pages and calls multimodal LLM."""
-    import fitz
-    # Create a real minimal PDF
-    doc = fitz.open()
-    for _ in range(30):
-        doc.new_page()
-    pdf_path = tmp_path / "test.pdf"
-    pdf_path.write_bytes(doc.tobytes())
-    doc.close()
-
-    pipeline = _make_pipeline(pdf_path=str(pdf_path))
-    llm = _VisionLLM()
-
-    result = pipeline.query_tree("TNBC 治療方案", ["乳癌診療指引-2026年.pdf"], llm_client=llm)
-
-    assert not result.abstain
-    assert result.answer == "vision synthesis answer"
-    assert len(llm.multimodal_calls) == 1
-    _, images = llm.multimodal_calls[0]
-    assert len(images) >= 1
-
-
-def test_query_tree_fallback_without_pdf():
-    """When no PDF path registered, query_tree falls back to text-only generation."""
-    pipeline = _make_pipeline(pdf_path=None)
-    llm = _VisionLLM()
-
-    result = pipeline.query_tree("TNBC 治療方案", ["乳癌診療指引-2026年.pdf"], llm_client=llm)
-
-    assert result.answer == "text fallback"
-    assert len(llm.multimodal_calls) == 0
-
-
 def test_build_tree_registers_pdf_path():
     """build_tree() with pdf_path param registers the mapping."""
     from pipeline.runner import RAGPipeline

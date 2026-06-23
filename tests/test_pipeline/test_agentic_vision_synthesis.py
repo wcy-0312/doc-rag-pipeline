@@ -81,21 +81,6 @@ def test_query_tree_agentic_uses_vision_when_pdf_registered(tmp_path):
     assert len(images) >= 1
 
 
-def test_query_tree_agentic_fallback_without_pdf():
-    """query_tree_agentic() should fall back to text when no PDF registered."""
-    pipeline, stem, leaf = _make_agentic_pipeline(pdf_path=None)
-    llm = _VisionLLM()
-
-    mock_search_result = MagicMock()
-    mock_search_result.matched_nodes = [leaf]
-
-    with patch("layer_f.tree_search.TreeSearcher.search", return_value=mock_search_result):
-        result = pipeline.query_tree_agentic("TNBC 治療方案", llm_client=llm)
-
-    assert result.answer == "text fallback"
-    assert len(llm.multimodal_calls) == 0
-
-
 def test_query_tree_agentic_vision_includes_patient_context(tmp_path):
     """Vision prompt should include patient_context when provided via dynamic tree."""
     import fitz
