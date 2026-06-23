@@ -38,6 +38,8 @@ PDF_PATH = Path(_pdf_candidates[0]) if _pdf_candidates else Path("docs/癌症診
 def _make_stem(s: str) -> str:
     """Mirror build_tree()'s doc_stem derivation (NFKC + sanitize)."""
     return re.sub(r'[^\w\-]', '_', unicodedata.normalize('NFKC', s))
+
+
 COLLECTION = "smoke_test_trees"
 
 QUERIES = [

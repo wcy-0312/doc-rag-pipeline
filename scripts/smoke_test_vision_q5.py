@@ -9,9 +9,12 @@ Run:
     python scripts/smoke_test_vision_q5.py --gpt41   # use GPT41 instead of Gemma3
 """
 import argparse
+import glob as _glob
 import json
+import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -23,8 +26,8 @@ from pipeline.runner import RAGPipeline
 
 RAW_PATH  = Path("output/layer_b/raw_乳癌診療指引-2026年.json")
 # Use glob to resolve the actual on-disk path (filename may contain CJK compatibility chars)
-_pdf_candidates = list(Path("docs/癌症診療指引").glob("*乳癌*2026*.pdf"))
-PDF_PATH  = _pdf_candidates[0] if _pdf_candidates else Path("docs/癌症診療指引/乳癌診療指引-2026年.pdf")
+_pdf_candidates = sorted(_glob.glob("**/*乳癌*2026*.pdf", recursive=True))
+PDF_PATH  = Path(_pdf_candidates[0]) if _pdf_candidates else Path("docs/癌症診療指引/乳癌診療指引-2026年.pdf")
 DOC_ID    = "乳癌診療指引-2026年.pdf"
 COLLECTION = "smoke_vision_q5"
 
@@ -95,7 +98,6 @@ def main():
     print(f"✓ 建樹完成 ({build_elapsed:.1f}s)，{sum(1 for _ in _iter_nodes(tree))} 個節點")
 
     # Confirm pdf_path registered
-    import re, unicodedata
     stem = re.sub(r'[^\w\-]', '_', unicodedata.normalize('NFKC', DOC_ID))
     registered = pipeline._tree_pdf_paths.get(stem)
     print(f"✓ pdf_path 已登錄 stem={stem!r}")

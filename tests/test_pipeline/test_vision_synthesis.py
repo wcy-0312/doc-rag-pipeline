@@ -48,11 +48,6 @@ def _make_pipeline(pdf_path: str | None = None):
     pipeline._collection_name_ref = "test"
     pipeline._gen = MagicMock()
     pipeline._gen._llm_client = _StubLLMClient()
-    pipeline._gen.run.return_value = GenerationResult(
-        answer="text fallback", claims=[], evidence_map={},
-        unsupported_claims=[], abstain=False, abstain_reason=None,
-        safety_verdict="safe", steps_log=[],
-    )
     return pipeline
 
 
