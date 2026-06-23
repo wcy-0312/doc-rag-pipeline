@@ -45,6 +45,27 @@ _AGENTIC_SYNTHESIS_TEMPLATE = """\
 
 請根據以上資訊，用繁體中文直接回答查詢。說明診療指引的建議是否適用於此病人，並給出具體說明。"""
 
+_VISION_SYSTEM = (
+    "你是醫療文件分析助理。根據提供的頁面圖片（包含流程圖、表格）與章節文字，"
+    "用繁體中文回答問題。請仔細讀取圖片中的決策流程與條件分支。"
+)
+
+_VISION_USER_TEMPLATE = """\
+查詢：{query}
+
+【章節文字摘要】
+{node_text}
+
+請根據上方章節文字以及以下頁面圖片中的流程圖、表格，完整回答查詢。\
+"""
+
+
+def _node_pages(node: "TreeNode") -> list[int]:
+    if node.start_page is None:
+        return []
+    end = node.end_page if node.end_page is not None else node.start_page
+    return list(range(node.start_page, end + 1))
+
 
 class RAGPipeline:
     """Five-layer pipeline: raw document dict → grounded answer.
@@ -110,6 +131,7 @@ class RAGPipeline:
         )
         self._registry = DocumentRegistry(registry_path) if registry_path else None
         self._tree_store = TreeStore()
+        self._tree_pdf_paths: dict[str, str] = {}
         self._qdrant_client = qdrant_client  # keep reference for tree store
         self._collection_name_ref = collection_name
 
@@ -233,6 +255,7 @@ class RAGPipeline:
         static: bool = True,
         session_id: str | None = None,
         llm_client=None,
+        pdf_path: str | None = None,
     ) -> TreeNode | None:
         """Build a PageIndexTree from a raw document dict and store it.
 
@@ -256,13 +279,19 @@ class RAGPipeline:
             LLM client for generating node summaries. If None, summaries are empty.
         """
         import re as _re_local
+        import unicodedata as _ud
         from pathlib import Path as _Path
         file_name = raw_document.get("metadata", {}).get("file_name") or doc_id
-        doc_stem = _re_local.sub(r'[^\w\-]', '_', file_name)
+        # NFKC: map CJK compatibility ideographs (e.g. U+F9C1) to canonical form
+        doc_stem = _re_local.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', file_name))
 
         tree = _build_tree_from_raw(raw_document, llm_client=llm_client)
         if tree is None:
             return None
+
+        if pdf_path and static:
+            pdf_stem = _re_local.sub(r'[^\w]', '_', _ud.normalize('NFKC', file_name))
+            self._tree_pdf_paths[pdf_stem] = pdf_path
 
         if static:
             self._ingester.create_collection_if_not_exists()
@@ -381,6 +410,51 @@ class RAGPipeline:
             result = searcher.search(query_text, tree)
             all_nodes.extend(result.matched_nodes)
 
+        # Vision synthesis: render pages and call multimodal LLM if PDF registered
+        from layer_f.page_renderer import render_pages
+        from layer_e.models import GenerationResult, ClaimCitation
+
+        pages_by_stem: dict[str, list[int]] = {}
+        import re as _re_q
+        import unicodedata as _ud_q
+        for doc_id in doc_ids:
+            raw_stem = _re_q.sub(r'[^\w]', '_', _ud_q.normalize('NFKC', doc_id)) if doc_id else doc_id
+            # find nodes that came from this stem's tree (by page range overlap is impractical;
+            # use all_nodes since single-tree is the common case, multi-tree pages are union)
+            pages = sorted({p for n in all_nodes for p in _node_pages(n)})
+            if pages:
+                pages_by_stem[raw_stem] = pages
+
+        all_images: list[bytes] = []
+        for stem, pages in pages_by_stem.items():
+            pdf_path_val = self._tree_pdf_paths.get(stem)
+            if pdf_path_val:
+                all_images.extend(render_pages(pdf_path_val, pages))
+
+        if all_images:
+            node_text = "\n\n".join(
+                f"【{n.title}】\n{n.content[:500]}"
+                for n in all_nodes if n.content
+            ) or "（無文字摘要）"
+            vision_prompt = _VISION_USER_TEMPLATE.format(
+                query=query_text,
+                node_text=node_text,
+            )
+            answer = _llm.generate_text_multimodal(
+                vision_prompt, all_images, system=_VISION_SYSTEM,
+            )
+            return GenerationResult(
+                answer=answer,
+                claims=[ClaimCitation(text=answer, citations=[])],
+                evidence_map={},
+                unsupported_claims=[],
+                abstain=False,
+                abstain_reason=None,
+                safety_verdict="safe",
+                steps_log=[],
+            )
+
+        # Fallback: text-only synthesis
         ranked = self._tree_nodes_to_ranked_results(all_nodes)
         return self._gen.run(query_text, ranked)
 
