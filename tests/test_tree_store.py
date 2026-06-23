@@ -88,3 +88,49 @@ def test_clear_session_does_not_affect_other_sessions(sample_tree):
     store.store_dynamic("session_delete", "doc", sample_tree)
     store.clear_session("session_delete")
     assert store.load_dynamic("session_keep", "doc") is not None
+
+
+def test_preload_static_populates_cache(qdrant, sample_tree):
+    store = TreeStore()
+    store.store_static("lung_guide_pdf", sample_tree, qdrant, _COLLECTION)
+    loaded = store.preload_static(["lung_guide_pdf"], qdrant, _COLLECTION)
+    assert loaded == ["lung_guide_pdf"]
+    assert "lung_guide_pdf" in store._static_cache
+    assert store._static_cache["lung_guide_pdf"].title == "治療原則"
+
+
+def test_load_static_uses_cache_skips_qdrant(sample_tree):
+    store = TreeStore()
+    store._static_cache["cached_doc"] = sample_tree
+    # Pass client=None — must not raise, cache should be hit before any Qdrant call
+    result = store.load_static("cached_doc", client=None, collection_name="ignored")
+    assert result is not None
+    assert result.title == "治療原則"
+
+
+def test_list_loaded_stems(sample_tree):
+    store = TreeStore()
+    store._static_cache["doc_a"] = sample_tree
+    store._static_cache["doc_b"] = sample_tree
+    assert set(store.list_loaded_stems()) == {"doc_a", "doc_b"}
+
+
+def test_get_static_summaries_fallback_chain():
+    from layer_f.tree_models import TreeNode
+    store = TreeStore()
+    store._static_cache["with_summary"] = TreeNode(
+        node_id="r", title="指引A", start_page=1, end_page=1,
+        summary="完整摘要", content="", children=[],
+    )
+    store._static_cache["title_only"] = TreeNode(
+        node_id="r", title="指引B", start_page=1, end_page=1,
+        summary="", content="", children=[],
+    )
+    store._static_cache["neither"] = TreeNode(
+        node_id="r", title="", start_page=1, end_page=1,
+        summary="", content="", children=[],
+    )
+    s = store.get_static_summaries()
+    assert s["with_summary"] == "完整摘要"
+    assert s["title_only"] == "指引B"
+    assert s["neither"] == "neither"
