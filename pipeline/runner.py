@@ -395,7 +395,7 @@ class RAGPipeline:
             )
 
         node_text = "\n\n".join(
-            f"【{n.title}】\n{n.content[:500]}"
+            f"【{n.title}】\n{n.content[:2000]}"
             for n in all_nodes if n.content
         ) or "（無文字摘要）"
         vision_query = (
@@ -541,7 +541,7 @@ class RAGPipeline:
                     result = searcher.search(query, tree)
                     for node in result.matched_nodes:
                         if node.content:
-                            parts.append(f"【{node.title}】\n{node.content[:500]}")
+                            parts.append(f"【{node.title}】\n{node.content[:1000]}")
             patient_context = "\n\n".join(parts)
 
         # ── Step 3: Static tree search ─────────────────────────────────────────
