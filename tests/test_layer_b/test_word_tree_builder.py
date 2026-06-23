@@ -114,3 +114,46 @@ def test_nested_h2_after_h3_resets_correctly():
     titles = [c.title for c in tree.children]
     assert "Section" in titles
     assert "Next Section" in titles
+
+
+# ── 頁碼範圍與 prov=[] 測試 ────────────────────────────────────────────────────
+
+def test_leaf_page_range():
+    tree = build_word_tree(_FLAT)
+    ch1 = next(c for c in tree.children if c.title == "第一章")
+    assert ch1.start_page == 1
+    assert ch1.end_page == 1
+
+
+def test_nonleaf_page_range_spans_children():
+    tree = build_word_tree(_NESTED)
+    ch1 = next(c for c in tree.children if c.title == "第一章")
+    # H2 children are at pages 2 and 4
+    assert ch1.start_page == 1  # includes heading page
+    assert ch1.end_page == 4
+
+
+def test_virtual_root_page_range_spans_all():
+    tree = build_word_tree(_FLAT)
+    assert tree.start_page == 1
+    assert tree.end_page == 5
+
+
+def test_prov_empty_page_is_none():
+    """DOCX native 模式：prov=[] → start_page=None, end_page=None。"""
+    raw = _raw([
+        _heading("無頁碼章節", level=1, page=None),
+        _body("內容", page=None),
+    ])
+    tree = build_word_tree(raw)
+    assert tree is not None
+    assert tree.start_page is None
+    assert tree.end_page is None
+
+
+def test_prov_empty_does_not_fallback_to_1():
+    """prov=[] 時 page 絕對不能 fallback 為 1。"""
+    raw = _raw([_heading("A", level=1, page=None)])
+    tree = build_word_tree(raw)
+    assert tree.start_page is None
+    assert tree.end_page is None
