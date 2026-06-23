@@ -30,6 +30,7 @@ def build_tree(raw: dict, llm_client: LLMClient | None = None) -> TreeNode | Non
     data = raw.get("data", {})
     sections = data.get("sections", [])
     paragraphs = data.get("paragraphs", [])
+    figures = data.get("figures", [])
 
     if not sections:
         return None
@@ -81,6 +82,20 @@ def build_tree(raw: dict, llm_client: LLMClient | None = None) -> TreeNode | Non
                         title = content   # only set title if not already from sec["title"]
                 elif content:
                     body_paras.append((content, page))
+            elif kind == "figures" and idx < len(figures):
+                fig = figures[idx]
+                for fig_elem_ref in fig.get("elements", []):
+                    fig_parts = str(fig_elem_ref).strip("/").split("/")
+                    try:
+                        fig_kind, fig_idx = fig_parts[-2], int(fig_parts[-1])
+                    except (IndexError, ValueError):
+                        continue
+                    if fig_kind == "paragraphs" and fig_idx < len(paragraphs):
+                        para = paragraphs[fig_idx]
+                        content = (para.get("content") or "").strip()
+                        page = _parse_page(para.get("source", ""))
+                        if content:
+                            body_paras.append((content, page))
             elif kind == "sections":
                 child_sec_indices.append(idx)
 
