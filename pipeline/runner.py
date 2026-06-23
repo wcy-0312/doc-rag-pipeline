@@ -32,6 +32,19 @@ from layer_f.tree_models import TreeNode
 from layer_f.tree_store import TreeStore
 from layer_f.tree_search import TreeSearcher
 
+_AGENTIC_SYNTHESIS_SYSTEM = "你是醫療文件分析助理，協助根據診療指引和病人資料回答臨床問題。"
+
+_AGENTIC_SYNTHESIS_TEMPLATE = """\
+查詢：{query}
+
+【病人資料摘要】
+{patient_context}
+
+【相關診療指引內容】
+{guideline_content}
+
+請根據以上資訊，用繁體中文直接回答查詢。說明診療指引的建議是否適用於此病人，並給出具體說明。"""
+
 
 class RAGPipeline:
     """Five-layer pipeline: raw document dict → grounded answer.
@@ -258,6 +271,27 @@ class RAGPipeline:
 
         return tree
 
+    def preload_trees(self, doc_ids: list[str]) -> list[str]:
+        """Session startup: eagerly load specified static trees into memory.
+
+        Parameters
+        ----------
+        doc_ids:
+            Full filenames (with extension) passed to build_tree(), e.g.
+            ["乳癌診療指引-2026年.pdf", "肺癌診療指引v20.1.pdf"].
+            Internally sanitised the same way as build_tree().
+
+        Returns
+        -------
+        list[str]
+            doc_stems that were successfully loaded (missing trees are silently skipped).
+        """
+        import re as _re_local
+        stems = [_re_local.sub(r'[^\w\-]', '_', doc_id) for doc_id in doc_ids]
+        return self._tree_store.preload_static(
+            stems, self._qdrant_client, self._collection_name_ref
+        )
+
     @staticmethod
     def _tree_nodes_to_ranked_results(nodes: list[TreeNode]) -> list[RankedResult]:
         """Convert TreeNode leaf content into RankedResult for GenerationPipeline."""
@@ -406,3 +440,118 @@ class RAGPipeline:
             safety_verdict="safe",
             steps_log=[],
         )
+
+    def query_tree_agentic(
+        self,
+        query: str,
+        session_id: str | None = None,
+        llm_client=None,
+    ):
+        """LLM-routed multi-tree query.
+
+        The LLM decides whether patient (dynamic) trees are needed, which static
+        guideline trees to search, then synthesises a final answer.
+
+        Parameters
+        ----------
+        query:
+            Natural language question.
+        session_id:
+            If provided, dynamic trees for this session are available for
+            patient-context extraction.
+        llm_client:
+            LLM client for routing, traversal, and synthesis.
+            Defaults to self._gen's llm_client.
+
+        Returns
+        -------
+        GenerationResult
+            Same structure as query(). .abstain is True when no preloaded trees
+            exist or the router finds no relevant guideline.
+        """
+        import re as _re_local
+        from layer_e.models import GenerationResult, ClaimCitation
+        from layer_f.tree_router import TreeRouter
+        from layer_f.tree_search import TreeSearcher
+
+        _llm = llm_client or self._gen._llm_client
+
+        # ── Step 1: Route ─────────────────────────────────────────────────────
+        static_summaries = self._tree_store.get_static_summaries()
+        if not static_summaries:
+            return GenerationResult(
+                answer="", claims=[], evidence_map={}, unsupported_claims=[],
+                abstain=True, abstain_reason="沒有預載的診療指引，請先呼叫 preload_trees()",
+                safety_verdict="abstained", steps_log=[],
+            )
+
+        dynamic_stems = list(self._tree_store._dynamic.get(session_id or "", {}).keys())
+        has_dynamic = bool(session_id and dynamic_stems)
+
+        decision = TreeRouter(_llm).route(query, static_summaries, has_dynamic)
+
+        # ── Step 2: Dynamic search (optional) ─────────────────────────────────
+        patient_context = ""
+        if decision.need_patient_context and has_dynamic:
+            searcher = TreeSearcher(_llm)
+            parts = []
+            for stem in dynamic_stems:
+                tree = self._tree_store.load_dynamic(session_id, stem)
+                if tree:
+                    result = searcher.search(query, tree)
+                    for node in result.matched_nodes:
+                        if node.content:
+                            parts.append(f"【{node.title}】\n{node.content[:500]}")
+            patient_context = "\n\n".join(parts)
+
+        # ── Step 3: Static tree search ─────────────────────────────────────────
+        if not decision.selected_stems:
+            return GenerationResult(
+                answer="", claims=[], evidence_map={}, unsupported_claims=[],
+                abstain=True, abstain_reason="LLM 判斷無相關診療指引可回答此問題",
+                safety_verdict="abstained", steps_log=[],
+            )
+
+        searcher = TreeSearcher(_llm)
+        effective_query = (
+            f"{query}\n\n【病人資料摘要】\n{patient_context}" if patient_context else query
+        )
+        all_static_nodes = []
+        for stem in decision.selected_stems:
+            tree = self._tree_store._static_cache.get(stem)
+            if tree:
+                result = searcher.search(effective_query, tree)
+                all_static_nodes.extend(result.matched_nodes)
+
+        if not all_static_nodes:
+            return GenerationResult(
+                answer="", claims=[], evidence_map={}, unsupported_claims=[],
+                abstain=True, abstain_reason="靜態樹 Top-down 搜尋無結果",
+                safety_verdict="abstained", steps_log=[],
+            )
+
+        # ── Step 4: Synthesise ─────────────────────────────────────────────────
+        if patient_context:
+            guideline_text = "\n\n".join(
+                f"【{n.title}】\n{n.content[:1000]}"
+                for n in all_static_nodes if n.content
+            ) or "（無相關章節）"
+            synthesis_prompt = _AGENTIC_SYNTHESIS_TEMPLATE.format(
+                query=query,
+                patient_context=patient_context[:2000],
+                guideline_content=guideline_text,
+            )
+            answer = _llm.generate_text(synthesis_prompt, system=_AGENTIC_SYNTHESIS_SYSTEM)
+            return GenerationResult(
+                answer=answer,
+                claims=[ClaimCitation(text=answer, citations=[])],
+                evidence_map={},
+                unsupported_claims=[],
+                abstain=False,
+                abstain_reason=None,
+                safety_verdict="safe",
+                steps_log=[],
+            )
+
+        ranked = self._tree_nodes_to_ranked_results(all_static_nodes)
+        return self._gen.run(query, ranked)
