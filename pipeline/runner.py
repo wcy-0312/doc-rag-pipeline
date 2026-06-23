@@ -14,6 +14,7 @@ e.g.: `from layer_b.pipeline import process_document`
 from __future__ import annotations
 
 import re as _re
+import unicodedata as _ud
 from pathlib import Path
 from typing import List, Optional
 
@@ -278,19 +279,16 @@ class RAGPipeline:
         llm_client:
             LLM client for generating node summaries. If None, summaries are empty.
         """
-        import re as _re_local
-        import unicodedata as _ud
-        from pathlib import Path as _Path
         file_name = raw_document.get("metadata", {}).get("file_name") or doc_id
         # NFKC: map CJK compatibility ideographs (e.g. U+F9C1) to canonical form
-        doc_stem = _re_local.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', file_name))
+        doc_stem = _re.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', file_name))
 
         tree = _build_tree_from_raw(raw_document, llm_client=llm_client)
         if tree is None:
             return None
 
         if pdf_path and static:
-            pdf_stem = _re_local.sub(r'[^\w]', '_', _ud.normalize('NFKC', file_name))
+            pdf_stem = _re.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', file_name))
             self._tree_pdf_paths[pdf_stem] = pdf_path
 
         if static:
@@ -320,8 +318,7 @@ class RAGPipeline:
         list[str]
             doc_stems that were successfully loaded (missing trees are silently skipped).
         """
-        import re as _re_local
-        stems = [_re_local.sub(r'[^\w\-]', '_', doc_id) for doc_id in doc_ids]
+        stems = [_re.sub(r'[^\w\-]', '_', doc_id) for doc_id in doc_ids]
         return self._tree_store.preload_static(
             stems, self._qdrant_client, self._collection_name_ref
         )
@@ -384,12 +381,11 @@ class RAGPipeline:
         -------
         GenerationResult (same structure as query())
         """
-        import re as _re_local
         _llm = llm_client or self._gen._llm_client
 
         trees = []
         for doc_id in doc_ids:
-            raw_stem = _re_local.sub(r'[^\w\-]', '_', doc_id) if doc_id else doc_id
+            raw_stem = _re.sub(r'[^\w\-]', '_', doc_id) if doc_id else doc_id
             tree = self._tree_store.load_static(
                 raw_stem, self._qdrant_client, self._collection_name_ref
             )
@@ -415,10 +411,8 @@ class RAGPipeline:
         from layer_e.models import GenerationResult, ClaimCitation
 
         pages_by_stem: dict[str, list[int]] = {}
-        import re as _re_q
-        import unicodedata as _ud_q
         for doc_id in doc_ids:
-            raw_stem = _re_q.sub(r'[^\w]', '_', _ud_q.normalize('NFKC', doc_id)) if doc_id else doc_id
+            raw_stem = _re.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', doc_id)) if doc_id else doc_id
             # find nodes that came from this stem's tree (by page range overlap is impractical;
             # use all_nodes since single-tree is the common case, multi-tree pages are union)
             pages = sorted({p for n in all_nodes for p in _node_pages(n)})
@@ -485,12 +479,11 @@ class RAGPipeline:
         -------
         GenerationResult where .answer contains the cross-tree synthesis.
         """
-        import re as _re_local
         from layer_e.models import GenerationResult, ClaimCitation
 
         _llm = llm_client or self._gen._llm_client
-        g_stem = _re_local.sub(r'[^\w\-]', '_', guideline_doc_id) if guideline_doc_id else guideline_doc_id
-        p_stem = _re_local.sub(r'[^\w\-]', '_', patient_doc_stem) if patient_doc_stem else patient_doc_stem
+        g_stem = _re.sub(r'[^\w\-]', '_', guideline_doc_id) if guideline_doc_id else guideline_doc_id
+        p_stem = _re.sub(r'[^\w\-]', '_', patient_doc_stem) if patient_doc_stem else patient_doc_stem
 
         guideline_tree = self._tree_store.load_static(
             g_stem, self._qdrant_client, self._collection_name_ref
@@ -548,7 +541,6 @@ class RAGPipeline:
             Same structure as query(). .abstain is True when no preloaded trees
             exist or the router finds no relevant guideline.
         """
-        import re as _re_local
         from layer_e.models import GenerationResult, ClaimCitation
         from layer_f.tree_router import TreeRouter
         from layer_f.tree_search import TreeSearcher

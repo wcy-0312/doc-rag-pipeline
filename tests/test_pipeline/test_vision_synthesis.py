@@ -33,7 +33,7 @@ def _make_pipeline(pdf_path: str | None = None):
     pipeline = RAGPipeline.__new__(RAGPipeline)
     pipeline._tree_pdf_paths = {}
     if pdf_path:
-        pipeline._tree_pdf_paths["乳癌診療指引_2026年_pdf"] = pdf_path
+        pipeline._tree_pdf_paths["乳癌診療指引-2026年_pdf"] = pdf_path
 
     mock_store = MagicMock()
     leaf = _make_leaf("sec_1", "TNBC 治療", 23, "neoadjuvant therapy content")
@@ -114,4 +114,4 @@ def test_build_tree_registers_pdf_path():
         pipeline.build_tree(raw_doc, "乳癌診療指引-2026年.pdf",
                             pdf_path="/path/to/doc.pdf")
 
-    assert pipeline._tree_pdf_paths.get("乳癌診療指引_2026年_pdf") == "/path/to/doc.pdf"
+    assert pipeline._tree_pdf_paths.get("乳癌診療指引-2026年_pdf") == "/path/to/doc.pdf"
