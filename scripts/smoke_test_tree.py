@@ -1,6 +1,9 @@
 """
-End-to-end smoke test for Tree RAG — Scenario 1 (static tree query) and
-the new query_tree_agentic() flow.
+End-to-end smoke test for Tree RAG — Scenario 1 (static tree query).
+
+Measures:
+  - Tree build time
+  - Per-query tree-search time for 5 clinical questions
 
 Run:
     python scripts/smoke_test_tree.py
@@ -9,8 +12,12 @@ Requires:
     - Gemma3 endpoint reachable at http://172.31.6.3:8080/gemma3/v1
     - output/layer_b/raw_乳癌診療指引-2026年.json exists
 """
+import glob
 import json
+import re
 import sys
+import time
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -18,13 +25,28 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, SparseVectorParams, SparseIndexParams
 
-from layer_b.tree_builder import build_tree
 from layer_e.llm_client import Gemma3Client, _StubLLMClient
 from pipeline.runner import RAGPipeline
 
 RAW_PATH = Path("output/layer_b/raw_乳癌診療指引-2026年.json")
 DOC_ID = "乳癌診療指引-2026年.pdf"
+
+_pdf_candidates = sorted(glob.glob("**/*乳癌*2026*.pdf", recursive=True))
+PDF_PATH = Path(_pdf_candidates[0]) if _pdf_candidates else Path("docs/癌症診療指引/乳癌診療指引-2026年.pdf")
+
+
+def _make_stem(s: str) -> str:
+    """Mirror build_tree()'s doc_stem derivation (NFKC + sanitize)."""
+    return re.sub(r'[^\w\-]', '_', unicodedata.normalize('NFKC', s))
 COLLECTION = "smoke_test_trees"
+
+QUERIES = [
+    "晚期三陰性乳癌（Advanced TNBC）的化學治療選項有哪些？",
+    "HER-2 陽性晚期乳癌的第一線治療建議是什麼？",
+    "CDK4/6 inhibitor 適用於哪種乳癌亞型？",
+    "全乳房放射治療（WBI）的劑量標準是什麼？",
+    "如果病人是 cT2N1M0，可以就這份乳癌指引給出治療建議嗎？",
+]
 
 
 def make_pipeline(llm_client=None):
@@ -46,8 +68,12 @@ def make_pipeline(llm_client=None):
     ), client
 
 
-def print_section(title: str):
-    print(f"\n{'='*60}\n{title}\n{'='*60}")
+def count_nodes(node):
+    return 1 + sum(count_nodes(c) for c in node.children)
+
+
+def hr(char="─", width=64):
+    print(char * width)
 
 
 def main():
@@ -56,54 +82,58 @@ def main():
         raw = json.load(f)
 
     gemma = Gemma3Client()
+    pipeline, _ = make_pipeline(llm_client=gemma)
 
-    # ── Setup: build and store static tree ──────────────────────────────
-    print_section("建立靜態樹")
-    pipeline, qdrant_client = make_pipeline(llm_client=gemma)
-    tree = pipeline.build_tree(raw, doc_id=DOC_ID, static=True)
+    # Derive stem the same way build_tree() does
+    file_name = raw.get("metadata", {}).get("file_name") or DOC_ID
+    doc_stem = _make_stem(file_name)
+
+    # ── Build static tree ────────────────────────────────────────────────
+    hr("═")
+    print("建立靜態樹")
+    hr("═")
+    print(f"doc_stem   : {doc_stem!r}")
+    t0 = time.perf_counter()
+    tree = pipeline.build_tree(raw, doc_id=DOC_ID, static=True, pdf_path=str(PDF_PATH.resolve()))
+    build_elapsed = time.perf_counter() - t0
+
     if tree is None:
         print("ERROR: build_tree 回傳 None，請確認 raw JSON 包含 sections[]")
         sys.exit(1)
 
-    def count_nodes(n, depth=0):
-        return 1 + sum(count_nodes(c) for c in n.children)
+    total_nodes = count_nodes(tree)
+    print(f"root title : {tree.title!r}")
+    print(f"node count : {total_nodes}")
+    print(f"build time : {build_elapsed:.1f}s")
 
-    print(f"樹建立成功：root='{tree.title}'，共 {count_nodes(tree)} 個節點")
+    # ── Scenario 1: query_tree_agentic() — 5 questions ───────────────────────
+    hr("═")
+    print("情境一：query_tree_agentic() — 靜態樹自動路由查詢（共 5 題）")
+    hr("═")
 
-    # ── Scenario 1: query_tree() ─────────────────────────────────────────
-    print_section("情境一：query_tree() — 靜態樹直接查詢")
+    pipeline.preload_trees([DOC_ID])
 
-    doc_stem = "乳癌診療指引-2026年_pdf"
-    queries_s1 = [
-        "三陰性晚期乳癌的治療選項有哪些？",
-        "HER-2 陽性晚期乳癌的一線治療建議？",
-    ]
-    for q in queries_s1:
-        print(f"\n查詢: {q}")
-        result = pipeline.query_tree(q, doc_ids=[doc_stem], llm_client=gemma)
-        status = "abstained" if result.abstain else "answered"
-        print(f"狀態: {status}")
-        print(f"答案: {result.answer[:300]}")
+    timings = []
+    for i, query in enumerate(QUERIES, start=1):
+        hr()
+        print(f"Q{i}: {query}")
+        hr()
+        t0 = time.perf_counter()
+        result = pipeline.query_tree_agentic(query, llm_client=gemma)
+        elapsed = time.perf_counter() - t0
+        timings.append(elapsed)
 
-    # ── Scenario 2: query_tree_agentic() without patient context ─────────
-    print_section("情境二：query_tree_agentic() — 無病人資料，LLM 自主路由")
+        if result.abstain:
+            print(f"⚠ abstained: {result.abstain_reason}")
+        else:
+            print("▶ 回答：")
+            print()
+            print(result.answer)
+        print()
+        print(f"⏱  {elapsed:.1f}s")
 
-    loaded = pipeline.preload_trees([DOC_ID])
-    print(f"預載靜態樹: {loaded}")
-
-    queries_s2 = [
-        "如果病人是 ER+/HER-2- 第 II 期乳癌，術後建議哪些輔助治療？",
-        "乳癌放射線治療的劑量原則為何？",
-    ]
-    for q in queries_s2:
-        print(f"\n查詢: {q}")
-        result = pipeline.query_tree_agentic(q, session_id=None, llm_client=gemma)
-        status = "abstained" if result.abstain else "answered"
-        reason = f" ({result.abstain_reason})" if result.abstain else ""
-        print(f"狀態: {status}{reason}")
-        print(f"答案: {result.answer[:400]}")
-
-    print_section("Smoke test 完成")
+    hr("═")
+    print(f"平均耗時：{sum(timings)/len(timings):.1f}s")
 
 
 if __name__ == "__main__":
