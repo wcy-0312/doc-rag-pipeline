@@ -250,6 +250,27 @@ class Gemma4Client(LLMClient):
         )
         return (response.choices[0].message.content or "").strip()
 
+    def generate_text_multimodal(self, user_text: str, images: list[bytes], system: str = "") -> str:
+        if not images:
+            return self.generate_text(user_text, system)
+        user_content: list[dict] = [{"type": "text", "text": user_text}]
+        for img_bytes in images:
+            b64 = base64.b64encode(img_bytes).decode()
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+            })
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user_content})
+        response = self._client.chat.completions.create(
+            model="/model",
+            messages=messages,
+            temperature=0.0,
+        )
+        return (response.choices[0].message.content or "").strip()
+
 
 def get_llm_client() -> LLMClient:
     backend = os.environ.get("GENERATION_LLM_BACKEND", "gemma3").lower()

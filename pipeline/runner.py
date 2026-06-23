@@ -318,7 +318,7 @@ class RAGPipeline:
         list[str]
             doc_stems that were successfully loaded (missing trees are silently skipped).
         """
-        stems = [_re.sub(r'[^\w\-]', '_', doc_id) for doc_id in doc_ids]
+        stems = [_re.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', doc_id)) for doc_id in doc_ids]
         return self._tree_store.preload_static(
             stems, self._qdrant_client, self._collection_name_ref
         )
@@ -380,6 +380,12 @@ class RAGPipeline:
         Returns
         -------
         GenerationResult (same structure as query())
+
+        Note
+        ----
+        When multiple doc_ids are provided and all have registered PDF paths, page images
+        from all matched nodes (across all trees) are pooled and sent to the vision LLM together.
+        Pages are not separated by source document.
         """
         _llm = llm_client or self._gen._llm_client
 
