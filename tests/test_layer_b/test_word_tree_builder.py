@@ -157,3 +157,47 @@ def test_prov_empty_does_not_fallback_to_1():
     tree = build_word_tree(raw)
     assert tree.start_page is None
     assert tree.end_page is None
+
+
+# ── LLM summary 與 list_item 測試 ────────────────────────────────────────────────
+
+class _MockLLM:
+    def __init__(self):
+        self.call_count = 0
+
+    def generate_text(self, user: str, system: str = "") -> str:
+        self.call_count += 1
+        return f"摘要{self.call_count}"
+
+
+def test_summary_generated_for_nonleaf():
+    llm = _MockLLM()
+    tree = build_word_tree(_NESTED, llm_client=llm)
+    ch1 = next(c for c in tree.children if c.title == "第一章")
+    assert ch1.summary != ""
+    assert llm.call_count >= 1
+
+
+def test_no_summary_when_llm_is_none():
+    tree = build_word_tree(_NESTED, llm_client=None)
+    ch1 = next(c for c in tree.children if c.title == "第一章")
+    assert ch1.summary == ""
+
+
+def test_leaf_summary_always_empty():
+    tree = build_word_tree(_FLAT)
+    ch1 = next(c for c in tree.children if c.title == "第一章")
+    assert ch1.is_leaf
+    assert ch1.summary == ""
+
+
+def test_list_item_treated_as_body():
+    raw = _raw([
+        _heading("清單章節", level=1, page=1),
+        _list_item("第一項", page=1),
+        _list_item("第二項", page=1),
+    ])
+    tree = build_word_tree(raw)
+    assert tree is not None
+    assert "第一項" in tree.content
+    assert "第二項" in tree.content
