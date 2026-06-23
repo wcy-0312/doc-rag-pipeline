@@ -1,8 +1,14 @@
 import abc
+import base64
 import json
 import os
 import re
 from typing import Optional
+
+try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover
+    OpenAI = None  # type: ignore[assignment,misc]
 
 
 def _parse_json_response(raw: str) -> dict:
@@ -33,6 +39,10 @@ class LLMClient(abc.ABC):
         else:
             user = user_parts
         return self.generate(system, user)
+
+    def generate_text_multimodal(self, user_text: str, images: list[bytes], system: str = "") -> str:
+        """Vision-capable text generation. Default: silently drop images, call generate_text."""
+        return self.generate_text(user_text, system)
 
     def generate_with_tools(self, messages: list, tools: list) -> tuple:
         """Override in subclasses that support function calling.
@@ -72,7 +82,6 @@ class _StubLLMClient(LLMClient):
 
 class Gemma3Client(LLMClient):
     def __init__(self):
-        from openai import OpenAI
         self._client = OpenAI(
             api_key="not-needed",
             base_url="http://172.31.6.3:8080/gemma3/v1",
@@ -102,6 +111,27 @@ class Gemma3Client(LLMClient):
         )
         return (response.choices[0].message.content or "").strip()
 
+    def generate_text_multimodal(self, user_text: str, images: list[bytes], system: str = "") -> str:
+        if not images:
+            return self.generate_text(user_text, system)
+        user_content: list[dict] = [{"type": "text", "text": user_text}]
+        for img_bytes in images:
+            b64 = base64.b64encode(img_bytes).decode()
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+            })
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user_content})
+        response = self._client.chat.completions.create(
+            model="/model",
+            messages=messages,
+            temperature=0.0,
+        )
+        return (response.choices[0].message.content or "").strip()
+
 
 class GPT41Client(LLMClient):
     def __init__(self):
@@ -116,7 +146,6 @@ class GPT41Client(LLMClient):
         self._deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
 
     def _make_client(self):
-        from openai import OpenAI
         return OpenAI(base_url=self._endpoint, api_key=self._token_provider())
 
     def generate(self, system: str, user: str) -> dict:
@@ -162,10 +191,30 @@ class GPT41Client(LLMClient):
         )
         return (text or "").strip()
 
+    def generate_text_multimodal(self, user_text: str, images: list[bytes], system: str = "") -> str:
+        if not images:
+            return self.generate_text(user_text, system)
+        user_content: list[dict] = [{"type": "text", "text": user_text}]
+        for img_bytes in images:
+            b64 = base64.b64encode(img_bytes).decode()
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+            })
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user_content})
+        response = self._make_client().chat.completions.create(
+            model=self._deployment,
+            messages=messages,
+            temperature=0.0,
+        )
+        return (response.choices[0].message.content or "").strip()
+
 
 class Gemma4Client(LLMClient):
     def __init__(self):
-        from openai import OpenAI
         self._client = OpenAI(
             api_key="not-needed",
             base_url="http://172.31.6.3:8080/gemma4/v1",
