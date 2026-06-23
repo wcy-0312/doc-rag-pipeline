@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from layer_e.llm_client import LLMClient
 
-_JSON_RE = re.compile(r'\{[^{}]*"relevant_guidelines"[^{}]*\}')
+_JSON_RE = re.compile(r'\{(?:[^{}]|\{[^{}]*\})*"relevant_guidelines"(?:[^{}]|\{[^{}]*\})*\}')
 
 _ROUTE_SYSTEM = "你是醫療查詢路由助理，協助判斷查詢所需的資料來源。"
 
@@ -69,6 +69,9 @@ class TreeRouter:
             data = json.loads(m.group())
             need_ctx = bool(data.get("need_patient_context", False))
             raw_indices = data.get("relevant_guidelines", [])
+            if raw_indices == []:
+                # LLM explicitly says no relevant guidelines → honour that
+                return RouteDecision(need_patient_context=need_ctx, selected_stems=[])
             indices = [i for i in raw_indices if isinstance(i, int) and 0 <= i < len(stems)]
             selected = [stems[i] for i in indices] if indices else list(stems)
             return RouteDecision(need_patient_context=need_ctx, selected_stems=selected)

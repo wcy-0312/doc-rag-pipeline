@@ -53,6 +53,7 @@ class TreeStore:
                 )
             ],
         )
+        self._static_cache[doc_stem] = tree
 
     def load_static(
         self,

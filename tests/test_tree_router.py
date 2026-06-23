@@ -56,3 +56,11 @@ def test_route_ignores_out_of_range_indices():
     summaries = {"only_one_pdf": "只有一份"}
     decision = router.route("問題", summaries, has_dynamic=False)
     assert decision.selected_stems == ["only_one_pdf"]   # index 99 ignored
+
+
+def test_route_returns_empty_when_llm_explicitly_returns_no_guidelines():
+    llm = _StubRouterLLM('{"need_patient_context": false, "relevant_guidelines": []}')
+    router = TreeRouter(llm)
+    summaries = {"doc_a": "A", "doc_b": "B"}
+    decision = router.route("不相關的問題", summaries, has_dynamic=False)
+    assert decision.selected_stems == []   # LLM says no match, must NOT fall back to all

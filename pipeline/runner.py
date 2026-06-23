@@ -241,7 +241,12 @@ class RAGPipeline:
         raw_document:
             Output from a layer_a extractor (same format as ingest()).
         doc_id:
-            Document identifier used as the storage key (e.g. PDF filename stem).
+            Document identifier used as storage key fallback when
+            ``metadata["file_name"]`` is absent. When the raw document contains
+            ``metadata["file_name"]``, that value takes precedence and determines
+            the stored ``doc_stem``. Pass the same value you used as ``doc_id`` to
+            ``preload_trees()`` only when ``metadata["file_name"]`` is absent or
+            equals ``doc_id``.
         static:
             True → store in Qdrant (persists across sessions).
             False → store in session memory (session_id required).

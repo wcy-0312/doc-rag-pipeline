@@ -54,6 +54,13 @@ def test_store_and_load_static(qdrant, sample_tree):
     assert loaded.children[0].content == "同步化放療為標準治療"
 
 
+def test_store_static_populates_cache(qdrant, sample_tree):
+    store = TreeStore()
+    store.store_static("guide_pdf", sample_tree, qdrant, _COLLECTION)
+    assert "guide_pdf" in store._static_cache
+    assert store._static_cache["guide_pdf"].title == "治療原則"
+
+
 def test_load_static_returns_none_for_missing(qdrant):
     store = TreeStore()
     result = store.load_static("nonexistent", qdrant, _COLLECTION)
