@@ -360,11 +360,90 @@ class RAGPipeline:
             ))
         return results
 
+    def _synthesise_nodes(
+        self,
+        query: str,
+        all_nodes: list,
+        stems: list,
+        llm,
+        vision_dpi: int = 100,
+        patient_context: str = "",
+    ) -> "GenerationResult":
+        """Vision-first synthesis shared by query_tree and query_tree_agentic.
+
+        Renders PDF pages for matched nodes if a PDF path is registered for any
+        of the given stems. Falls back to text-only synthesis otherwise.
+        """
+        from layer_f.page_renderer import render_pages
+        from layer_e.models import GenerationResult, ClaimCitation
+
+        pages = sorted({p for n in all_nodes for p in _node_pages(n)})
+        all_images: list[bytes] = []
+        for stem in stems:
+            pdf_path_val = self._tree_pdf_paths.get(stem)
+            if pdf_path_val and pages:
+                all_images.extend(render_pages(pdf_path_val, pages, dpi=vision_dpi))
+
+        if all_images:
+            node_text = "\n\n".join(
+                f"【{n.title}】\n{n.content[:500]}"
+                for n in all_nodes if n.content
+            ) or "（無文字摘要）"
+            vision_query = (
+                f"{query}\n\n【病人資料摘要】\n{patient_context}"
+                if patient_context else query
+            )
+            vision_prompt = _VISION_USER_TEMPLATE.format(
+                query=vision_query,
+                node_text=node_text,
+            )
+            answer = llm.generate_text_multimodal(
+                vision_prompt, all_images, system=_VISION_SYSTEM,
+            )
+            return GenerationResult(
+                answer=answer,
+                claims=[ClaimCitation(text=answer, citations=[])],
+                evidence_map={},
+                unsupported_claims=[],
+                abstain=False,
+                abstain_reason=None,
+                safety_verdict="safe",
+                steps_log=[],
+            )
+
+        # Text fallback: patient context path
+        if patient_context:
+            guideline_text = "\n\n".join(
+                f"【{n.title}】\n{n.content[:1000]}"
+                for n in all_nodes if n.content
+            ) or "（無相關章節）"
+            synthesis_prompt = _AGENTIC_SYNTHESIS_TEMPLATE.format(
+                query=query,
+                patient_context=patient_context[:2000],
+                guideline_content=guideline_text,
+            )
+            answer = llm.generate_text(synthesis_prompt, system=_AGENTIC_SYNTHESIS_SYSTEM)
+            return GenerationResult(
+                answer=answer,
+                claims=[ClaimCitation(text=answer, citations=[])],
+                evidence_map={},
+                unsupported_claims=[],
+                abstain=False,
+                abstain_reason=None,
+                safety_verdict="safe",
+                steps_log=[],
+            )
+
+        # Text fallback: no patient context
+        ranked = self._tree_nodes_to_ranked_results(all_nodes)
+        return self._gen.run(query, ranked)
+
     def query_tree(
         self,
         query_text: str,
         doc_ids: list[str],
         llm_client=None,
+        vision_dpi: int = 100,
     ):
         """Example 1: Top-down tree traversal on one or more static trees.
 
@@ -412,51 +491,12 @@ class RAGPipeline:
             result = searcher.search(query_text, tree)
             all_nodes.extend(result.matched_nodes)
 
-        # Vision synthesis: render pages and call multimodal LLM if PDF registered
-        from layer_f.page_renderer import render_pages
-        from layer_e.models import GenerationResult, ClaimCitation
-
-        pages_by_stem: dict[str, list[int]] = {}
-        for doc_id in doc_ids:
-            raw_stem = _re.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', doc_id)) if doc_id else doc_id
-            # find nodes that came from this stem's tree (by page range overlap is impractical;
-            # use all_nodes since single-tree is the common case, multi-tree pages are union)
-            pages = sorted({p for n in all_nodes for p in _node_pages(n)})
-            if pages:
-                pages_by_stem[raw_stem] = pages
-
-        all_images: list[bytes] = []
-        for stem, pages in pages_by_stem.items():
-            pdf_path_val = self._tree_pdf_paths.get(stem)
-            if pdf_path_val:
-                all_images.extend(render_pages(pdf_path_val, pages))
-
-        if all_images:
-            node_text = "\n\n".join(
-                f"【{n.title}】\n{n.content[:500]}"
-                for n in all_nodes if n.content
-            ) or "（無文字摘要）"
-            vision_prompt = _VISION_USER_TEMPLATE.format(
-                query=query_text,
-                node_text=node_text,
-            )
-            answer = _llm.generate_text_multimodal(
-                vision_prompt, all_images, system=_VISION_SYSTEM,
-            )
-            return GenerationResult(
-                answer=answer,
-                claims=[ClaimCitation(text=answer, citations=[])],
-                evidence_map={},
-                unsupported_claims=[],
-                abstain=False,
-                abstain_reason=None,
-                safety_verdict="safe",
-                steps_log=[],
-            )
-
-        # Fallback: text-only synthesis
-        ranked = self._tree_nodes_to_ranked_results(all_nodes)
-        return self._gen.run(query_text, ranked)
+        # Synthesis (vision-first, text fallback)
+        stems = [
+            _re.sub(r'[^\w\-]', '_', _ud.normalize('NFKC', d))
+            for d in doc_ids if d
+        ]
+        return self._synthesise_nodes(query_text, all_nodes, stems, _llm, vision_dpi)
 
     def query_tree_cross(
         self,
@@ -524,6 +564,7 @@ class RAGPipeline:
         query: str,
         session_id: str | None = None,
         llm_client=None,
+        vision_dpi: int = 100,
     ):
         """LLM-routed multi-tree query.
 
@@ -547,7 +588,7 @@ class RAGPipeline:
             Same structure as query(). .abstain is True when no preloaded trees
             exist or the router finds no relevant guideline.
         """
-        from layer_e.models import GenerationResult, ClaimCitation
+        from layer_e.models import GenerationResult
         from layer_f.tree_router import TreeRouter
         from layer_f.tree_search import TreeSearcher
 
@@ -607,28 +648,12 @@ class RAGPipeline:
                 safety_verdict="abstained", steps_log=[],
             )
 
-        # ── Step 4: Synthesise ─────────────────────────────────────────────────
-        if patient_context:
-            guideline_text = "\n\n".join(
-                f"【{n.title}】\n{n.content[:1000]}"
-                for n in all_static_nodes if n.content
-            ) or "（無相關章節）"
-            synthesis_prompt = _AGENTIC_SYNTHESIS_TEMPLATE.format(
-                query=query,
-                patient_context=patient_context[:2000],
-                guideline_content=guideline_text,
-            )
-            answer = _llm.generate_text(synthesis_prompt, system=_AGENTIC_SYNTHESIS_SYSTEM)
-            return GenerationResult(
-                answer=answer,
-                claims=[ClaimCitation(text=answer, citations=[])],
-                evidence_map={},
-                unsupported_claims=[],
-                abstain=False,
-                abstain_reason=None,
-                safety_verdict="safe",
-                steps_log=[],
-            )
-
-        ranked = self._tree_nodes_to_ranked_results(all_static_nodes)
-        return self._gen.run(query, ranked)
+        # ── Step 4: Synthesise (vision-first, text fallback) ──────────────────
+        return self._synthesise_nodes(
+            query,
+            all_static_nodes,
+            decision.selected_stems,
+            _llm,
+            vision_dpi=vision_dpi,
+            patient_context=patient_context,
+        )
