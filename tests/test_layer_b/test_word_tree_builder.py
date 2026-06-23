@@ -25,3 +25,11 @@ def _body(text: str, page: int | None = 1) -> dict:
 def _list_item(text: str, page: int | None = 1) -> dict:
     prov = [{"page_no": page}] if page is not None else []
     return {"label": "list_item", "text": text, "prov": prov}
+
+
+def test_returns_none_when_no_texts():
+    assert build_word_tree({"metadata": {}, "data": {}}) is None
+
+
+def test_returns_none_when_texts_empty():
+    assert build_word_tree(_raw([])) is None
