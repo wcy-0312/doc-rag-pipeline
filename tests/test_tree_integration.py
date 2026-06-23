@@ -79,16 +79,16 @@ def pipeline():
 
 
 def test_build_tree_static_returns_tree_node(pipeline):
-    tree = pipeline.build_tree(_RAW_GUIDELINE, doc_id="lung_guide", static=True)
+    tree = pipeline.build_tree(_RAW_GUIDELINE, doc_id="lung_guide.pdf", static=True)
     assert tree is not None
     assert tree.title == "治療原則"
 
 
 def test_build_tree_static_stored_in_qdrant(pipeline):
-    pipeline.build_tree(_RAW_GUIDELINE, doc_id="lung_guide", static=True)
+    pipeline.build_tree(_RAW_GUIDELINE, doc_id="lung_guide.pdf", static=True)
     # Re-load to confirm persistence
     loaded = pipeline._tree_store.load_static(
-        "lung_guide", pipeline._qdrant_client, _COLLECTION
+        "lung_guide_pdf", pipeline._qdrant_client, _COLLECTION
     )
     assert loaded is not None
     assert loaded.title == "治療原則"
@@ -96,32 +96,32 @@ def test_build_tree_static_stored_in_qdrant(pipeline):
 
 def test_build_tree_dynamic_stored_in_session(pipeline):
     tree = pipeline.build_tree(
-        _RAW_PATIENT, doc_id="patient_001",
+        _RAW_PATIENT, doc_id="patient_001.pdf",
         static=False, session_id="sess_1"
     )
     assert tree is not None
-    loaded = pipeline._tree_store.load_dynamic("sess_1", "patient_001")
+    loaded = pipeline._tree_store.load_dynamic("sess_1", "patient_001_pdf")
     assert loaded is not None
 
 
 def test_query_tree_returns_generation_result(pipeline):
-    pipeline.build_tree(_RAW_GUIDELINE, doc_id="lung_guide", static=True)
-    result = pipeline.query_tree("第III期治療方式？", doc_ids=["lung_guide"])
+    pipeline.build_tree(_RAW_GUIDELINE, doc_id="lung_guide.pdf", static=True)
+    result = pipeline.query_tree("第III期治療方式？", doc_ids=["lung_guide_pdf"])
     assert result is not None
     assert hasattr(result, "answer")
 
 
 def test_query_tree_cross_returns_synthesis(pipeline):
-    pipeline.build_tree(_RAW_GUIDELINE, doc_id="lung_guide", static=True)
+    pipeline.build_tree(_RAW_GUIDELINE, doc_id="lung_guide.pdf", static=True)
     pipeline.build_tree(
-        _RAW_PATIENT, doc_id="patient_001",
+        _RAW_PATIENT, doc_id="patient_001.pdf",
         static=False, session_id="sess_2"
     )
     result = pipeline.query_tree_cross(
         query_text="病人是否符合免疫治療給付？",
-        guideline_doc_id="lung_guide",
+        guideline_doc_id="lung_guide_pdf",
         session_id="sess_2",
-        patient_doc_stem="patient_001",
+        patient_doc_stem="patient_001_pdf",
     )
     assert result is not None
     assert hasattr(result, "answer")
