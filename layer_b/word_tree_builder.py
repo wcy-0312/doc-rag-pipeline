@@ -60,7 +60,7 @@ def build_word_tree(raw: dict, llm_client: "LLMClient | None" = None) -> TreeNod
         node = entry["node"]
         if node is None:
             return
-        all_p = [p for p in entry["pages"] if p is not None]
+        all_p = [p for p in [node.start_page] + entry["pages"] if p is not None]
         if node.is_leaf:
             node.content = "\n".join(entry["body"])
         node.start_page = min(all_p) if all_p else None

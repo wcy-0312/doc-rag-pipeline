@@ -201,3 +201,27 @@ def test_list_item_treated_as_body():
     assert tree is not None
     assert "第一項" in tree.content
     assert "第二項" in tree.content
+
+
+def test_heading_page_preserved_when_body_prov_empty():
+    """Heading's page must survive even when body items have prov=[]."""
+    raw = _raw([
+        _heading("Chapter", level=1, page=3),
+        _body("Content with no page", page=None),
+    ])
+    tree = build_word_tree(raw)
+    assert tree is not None
+    assert tree.start_page == 3
+    assert tree.end_page == 3
+
+
+def test_body_before_first_heading_is_ignored():
+    """Body text before any heading is silently dropped (no heading to attach to)."""
+    raw = _raw([
+        _body("Preamble text", page=1),
+        _heading("Chapter 1", level=1, page=2),
+        _body("Chapter content", page=2),
+    ])
+    tree = build_word_tree(raw)
+    assert tree is not None
+    assert "Preamble" not in tree.content
