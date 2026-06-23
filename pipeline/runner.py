@@ -239,8 +239,8 @@ class RAGPipeline:
         """
         import re as _re_local
         from pathlib import Path as _Path
-        raw_stem = _Path(raw_document.get("metadata", {}).get("file_name", doc_id)).stem
-        doc_stem = _re_local.sub(r'[^\w\-]', '_', raw_stem) if raw_stem else doc_id
+        file_name = raw_document.get("metadata", {}).get("file_name") or doc_id
+        doc_stem = _re_local.sub(r'[^\w\-]', '_', file_name)
 
         tree = _build_tree_from_raw(raw_document, llm_client=llm_client)
         if tree is None:
