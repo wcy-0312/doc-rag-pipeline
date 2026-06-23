@@ -82,6 +82,8 @@ class _StubLLMClient(LLMClient):
 
 class Gemma3Client(LLMClient):
     def __init__(self):
+        if OpenAI is None:
+            raise ImportError("openai package is required: pip install openai")
         self._client = OpenAI(
             api_key="not-needed",
             base_url="http://172.31.6.3:8080/gemma3/v1",
@@ -146,6 +148,8 @@ class GPT41Client(LLMClient):
         self._deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
 
     def _make_client(self):
+        if OpenAI is None:
+            raise ImportError("openai package is required: pip install openai")
         return OpenAI(base_url=self._endpoint, api_key=self._token_provider())
 
     def generate(self, system: str, user: str) -> dict:
@@ -215,6 +219,8 @@ class GPT41Client(LLMClient):
 
 class Gemma4Client(LLMClient):
     def __init__(self):
+        if OpenAI is None:
+            raise ImportError("openai package is required: pip install openai")
         self._client = OpenAI(
             api_key="not-needed",
             base_url="http://172.31.6.3:8080/gemma4/v1",
