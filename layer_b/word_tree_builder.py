@@ -1,11 +1,112 @@
 from __future__ import annotations
 
+import re as _re
+from enum import Enum
 from typing import TYPE_CHECKING
 
 from layer_f.tree_models import TreeNode
 
 if TYPE_CHECKING:
     from layer_e.llm_client import LLMClient
+
+# ── Table type classifier ─────────────────────────────────────────────────────
+
+class _TableType(Enum):
+    MATRIX       = "matrix"       # col=0: unique meaningful labels → one leaf per row
+    LONGITUDINAL = "longitudinal" # col=0: repeated categories → one leaf per category
+    RECORD       = "record"       # col=0: placeholders or field-labels → single leaf
+    CHART        = "chart"        # col=0: numeric scale → single leaf from body texts
+    INDEX        = "index"        # col=0: sequential integers → chunked leaves
+
+
+# Matches field-descriptor labels common in transposed-record tables:
+#   "日期/班別/", "不符合項目", "處理對策", "再確認", "稽核人員\n簽名"
+_FIELD_LABEL_RE = _re.compile(
+    r'[/／]|項目$|對策$|確認$|簽名$|編號$|記錄$|說明$', _re.MULTILINE
+)
+
+
+def _data_rows(grid: list[list[dict]]) -> list[list[dict]]:
+    """Non-header rows from table grid."""
+    return [row for row in grid if row and not row[0].get("column_header", False)]
+
+
+def _col0_texts(grid: list[list[dict]]) -> list[str]:
+    """col=0 text values from non-header rows, stripped."""
+    return [row[0].get("text", "").strip() for row in _data_rows(grid) if row]
+
+
+def _is_numeric(s: str) -> bool:
+    return bool(_re.match(r'^-?\d+\.?\d*\n?$', s.strip()))
+
+
+def _is_sequential_int(values: list[str]) -> bool:
+    """True if values are sequential integers starting near 1 (e.g. 1,2,3,4,...)."""
+    nums = []
+    for v in values:
+        v = v.strip()
+        if not v:
+            continue
+        if not _re.match(r'^\d+$', v):
+            return False
+        nums.append(int(v))
+    if len(nums) < 3:
+        return False
+    return nums == list(range(nums[0], nums[0] + len(nums)))
+
+
+def _is_nav_label(text: str) -> bool:
+    """True if text could serve as a navigation label (meaningful noun, not a placeholder)."""
+    s = text.strip()
+    if not s or len(s) < 2:
+        return False
+    # Pure symbol/whitespace
+    if _re.match(r'^[/：:\s，、\-\n]+$', s):
+        return False
+    # Pure number
+    if _re.match(r'^-?\d+\.?\d*\n?$', s):
+        return False
+    return True
+
+
+def _classify_table(grid: list[list[dict]]) -> _TableType:
+    """Classify a docling table grid into one of five navigation strategies."""
+    if not grid:
+        return _TableType.RECORD
+
+    col0 = _col0_texts(grid)
+    non_empty = [v for v in col0 if v]
+
+    if not non_empty:
+        return _TableType.RECORD
+
+    # INDEX: sequential integers (form directory, numbered lists) — check BEFORE CHART
+    if _is_sequential_int(non_empty):
+        return _TableType.INDEX
+
+    # CHART: all col=0 are numeric (temperature scale, etc.)
+    if all(_is_numeric(v) for v in non_empty):
+        return _TableType.CHART
+
+    nav = [v for v in non_empty if _is_nav_label(v)]
+    nav_ratio = len(nav) / len(non_empty)
+
+    if nav_ratio < 0.5:
+        return _TableType.RECORD
+
+    # RECORD: even if nav-looking, if majority are field descriptors
+    # (transposed-record tables like 不符合處理單)
+    field_count = sum(1 for v in nav if _FIELD_LABEL_RE.search(v))
+    if field_count / max(len(nav), 1) >= 0.5:
+        return _TableType.RECORD
+
+    # LONGITUDINAL: duplicate col=0 values (categories with sub-rows)
+    if len(set(nav)) < len(nav):
+        return _TableType.LONGITUDINAL
+
+    return _TableType.MATRIX
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 _SUMMARY_SYSTEM = "你是醫療文件助理。"
 _SUMMARY_USER_TEMPLATE = (

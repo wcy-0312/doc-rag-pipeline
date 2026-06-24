@@ -225,3 +225,90 @@ def test_body_before_first_heading_is_ignored():
     tree = build_word_tree(raw)
     assert tree is not None
     assert "Preamble" not in tree.content
+
+
+# ── Table classifier ──────────────────────────────────────────────────────────
+
+from layer_b.word_tree_builder import _TableType, _classify_table
+
+def _cell(text: str, col_hdr: bool = False) -> dict:
+    return {"text": text, "column_header": col_hdr}
+
+def _hdr(*texts):
+    return [_cell(t, col_hdr=True) for t in texts]
+
+def _row(*texts):
+    return [_cell(t, col_hdr=False) for t in texts]
+
+
+class TestClassifyTable:
+    def test_matrix_unique_nav_labels(self):
+        grid = [
+            _hdr("類別", "2月", "4月"),
+            _row("急救護理用品基數查核", "正確", "不正確"),
+            _row("急救護理用品有效期限", "期限內", "期限2個月內"),
+            _row("備用量適當性", "適當", "增加"),
+        ]
+        assert _classify_table(grid) == _TableType.MATRIX
+
+    def test_longitudinal_repeated_col0(self):
+        grid = [
+            _hdr("類別", "項目"),
+            _row("外滲皮膚外觀", "大小"),
+            _row("外滲皮膚外觀", "腫脹"),
+            _row("外滲皮膚外觀", "水泡"),
+            _row("傷口照護", "Tegaderm"),
+            _row("傷口照護", "Duoderm"),
+        ]
+        assert _classify_table(grid) == _TableType.LONGITUDINAL
+
+    def test_record_slash_placeholders(self):
+        grid = [
+            _hdr("日期", "1", "2"),
+            _row("/", "", ""),
+            _row("：", "", ""),
+            _row("診斷：", "", ""),
+        ]
+        assert _classify_table(grid) == _TableType.RECORD
+
+    def test_record_field_labels_transposed(self):
+        # B21: rows are field names, records are in columns
+        grid = [
+            _hdr("單位", "", ""),
+            _row("日期/班別/", "", ""),
+            _row("不符合項目", "", ""),
+            _row("處理對策", "", ""),
+            _row("再確認", "", ""),
+        ]
+        # col0 majority are nav-looking but table has < 3 unique meaningful rows
+        # with a header "單位" and field rows that end with / or are action nouns;
+        # since non-empty col0 ratio of nav_labels is ≥ 0.5 and all unique → MATRIX
+        # BUT wait — this should be RECORD because the RECORDS are in columns.
+        # Heuristic: if rows ≤ 6 AND unique meaningful labels AND each label
+        # is a "field descriptor" (contains /, ends with 項目/對策/確認), treat as RECORD.
+        # Implementation detail: the classifier uses a field-label regex to detect this.
+        assert _classify_table(grid) == _TableType.RECORD
+
+    def test_chart_numeric_col0(self):
+        grid = [
+            _hdr("溫度", "1", "2"),
+            _row("14", "", ""),
+            _row("12", "", ""),
+            _row("8", "", ""),
+            _row("-2", "", ""),
+            _row("-4", "", ""),
+        ]
+        assert _classify_table(grid) == _TableType.CHART
+
+    def test_index_sequential_integers(self):
+        grid = [_hdr("序號", "編號", "名稱")] + [
+            _row(str(i), f"A{i:02d}", f"表單{i}") for i in range(1, 8)
+        ]
+        assert _classify_table(grid) == _TableType.INDEX
+
+    def test_empty_grid_returns_record(self):
+        assert _classify_table([]) == _TableType.RECORD
+
+    def test_single_header_row_returns_record(self):
+        grid = [_hdr("類別", "內容")]
+        assert _classify_table(grid) == _TableType.RECORD
