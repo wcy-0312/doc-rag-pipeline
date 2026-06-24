@@ -29,6 +29,34 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
+# ── DOCX → PDF 渲染轉換 ──────────────────────────────────────────────────────
+
+def _convert_docx_to_pdf_for_render(docx_path: Path) -> str | None:
+    """Convert a .docx file to PDF using LibreOffice for visual rendering.
+
+    The PDF is saved alongside the source file as <stem>.render.pdf.
+    Returns the absolute PDF path, or None if conversion fails.
+    """
+    import subprocess
+    pdf_path = docx_path.parent / (docx_path.stem + ".render.pdf")
+    if pdf_path.exists():
+        return str(pdf_path)
+    try:
+        result = subprocess.run(
+            ["libreoffice", "--headless", "--convert-to", "pdf",
+             "--outdir", str(docx_path.parent), str(docx_path)],
+            capture_output=True, timeout=90,
+        )
+        # LibreOffice outputs <stem>.pdf — rename to .render.pdf
+        raw_pdf = docx_path.parent / (docx_path.stem + ".pdf")
+        if result.returncode == 0 and raw_pdf.exists():
+            raw_pdf.rename(pdf_path)
+            return str(pdf_path)
+    except Exception:
+        pass
+    return None
+
+
 # ── QC 計算 ──────────────────────────────────────────────────────────────────
 
 import re as _re
@@ -176,7 +204,7 @@ def convert_word_docling(
         return {
             "schema_version": "v3.0",
             "metadata":       metadata,
-            "data":           {},
+            "data":           {"pdf_path_for_render": None},
             "page_count":     0,
         }
 
@@ -222,20 +250,24 @@ def convert_word_docling(
         "warnings":         qc.get("warnings", []),
     }
 
+    # Add render PDF path for vision synthesis
+    pdf_path_for_render = _convert_docx_to_pdf_for_render(word_path)
+
     return {
         "schema_version": "v3.0",
         "metadata": metadata,
         "data": {
-            "markdown":        markdown,
-            "texts":           raw.get("texts",           []),
-            "tables":          raw.get("tables",          []),
-            "pictures":        pictures,
-            "pages":           raw.get("pages",           {}),
-            "groups":          raw.get("groups",          []),
-            "key_value_items": raw.get("key_value_items", []),
-            "body":            raw.get("body",            {}),
-            "page_images":     page_images,
-            "furniture":       raw.get("furniture",       {}),
+            "markdown":           markdown,
+            "texts":              raw.get("texts",           []),
+            "tables":             raw.get("tables",          []),
+            "pictures":           pictures,
+            "pages":              raw.get("pages",           {}),
+            "groups":             raw.get("groups",          []),
+            "key_value_items":    raw.get("key_value_items", []),
+            "body":               raw.get("body",            {}),
+            "page_images":        page_images,
+            "furniture":          raw.get("furniture",       {}),
+            "pdf_path_for_render": pdf_path_for_render,   # None if LibreOffice failed
         },
         "page_count": page_count,
     }
