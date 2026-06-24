@@ -12,6 +12,8 @@ import re
 import unicodedata
 from pathlib import Path
 
+import fitz
+
 from layer_b.tree_builder import build_tree as _build_tree_from_raw
 from layer_d.ingestion import DocumentIngester
 from layer_f.tree_store import TreeStore
@@ -216,8 +218,11 @@ class TreeRAGPipeline:
             if pages:
                 all_images.extend(render_pages(pdf_path, pages, dpi=vision_dpi))
             else:
+                # Limitation: if this query mixes PDF stems (pages known) with Word stems
+                # (start_page=None), the Word stem falls into the `if pages:` branch above
+                # and attempts to render specific page numbers from the Word render PDF,
+                # which may produce incorrect results. This edge case is not yet handled.
                 # Word nodes have no page numbers — render all pages (up to 10)
-                import fitz
                 try:
                     doc = fitz.open(pdf_path)
                     all_pages = list(range(1, min(doc.page_count + 1, 11)))
