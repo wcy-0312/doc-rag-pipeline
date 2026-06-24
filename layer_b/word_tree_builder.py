@@ -219,6 +219,241 @@ def _table_to_nodes(grid: list[list[dict]], doc_title: str) -> list[TreeNode]:
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+_CN_HEADING_RE = _re.compile(r'^[一二三四五六七八九十百千]+[、.）)：]\s*\S')
+
+
+def _is_cn_heading(text: str) -> bool:
+    """True if text looks like a Chinese-numbered section heading (一、二、三、)."""
+    return bool(_CN_HEADING_RE.match(text.strip()))
+
+
+def _flatten_body_refs(refs: list[str], ref_map: dict) -> list[tuple[str, dict]]:
+    """Resolve body.children refs into an ordered list of (kind, item) tuples.
+
+    Skips furniture items. Recursively expands groups.
+    kind is one of: "text", "table", "picture".
+    """
+    result: list[tuple[str, dict]] = []
+    for ref in refs:
+        entry = ref_map.get(ref)
+        if entry is None:
+            continue
+        kind, item = entry
+        if item.get("content_layer") == "furniture":
+            continue
+        if kind == "group":
+            child_refs = [c["$ref"] for c in item.get("children", [])]
+            result.extend(_flatten_body_refs(child_refs, ref_map))
+        else:
+            result.append((kind, item))
+    return result
+
+
+def _build_from_section_headers(
+    items: list[tuple[str, dict]],
+    doc_title: str,
+    llm_client,
+) -> list[TreeNode]:
+    """Stack-based algorithm for documents with section_header labels (existing behavior)."""
+    node_counter = [0]
+
+    def _nid() -> str:
+        node_counter[0] += 1
+        return f"word_{node_counter[0]}"
+
+    stack: list[dict] = [{"level": 0, "node": None, "body": [], "pages": []}]
+    roots: list[TreeNode] = []
+
+    def _finalise(entry: dict) -> None:
+        node = entry["node"]
+        if node is None:
+            return
+        all_p = [p for p in [node.start_page] + entry["pages"] if p is not None]
+        if node.is_leaf:
+            node.content = "\n".join(entry["body"])
+        node.start_page = min(all_p) if all_p else None
+        node.end_page = max(all_p) if all_p else None
+
+    for kind, item in items:
+        if kind != "text":
+            continue
+        label = item.get("label", "")
+        text = (item.get("text") or "").strip()
+        if not text:
+            continue
+
+        if label == "section_header":
+            level = int(item.get("level") or 1)
+            page = _get_page(item)
+            while len(stack) > 1 and stack[-1]["level"] >= level:
+                _finalise(stack[-1])
+                stack.pop()
+            new_node = TreeNode(
+                node_id=_nid(), title=text,
+                start_page=page, end_page=page,
+                summary="", content="", children=[],
+            )
+            parent = stack[-1]["node"]
+            if parent is not None:
+                parent.children.append(new_node)
+            else:
+                roots.append(new_node)
+            stack.append({"level": level, "node": new_node,
+                          "body": [], "pages": [page] if page is not None else []})
+
+        elif label in _BODY_LABELS:
+            if len(stack) > 1:
+                entry = stack[-1]
+                entry["body"].append(text)
+                page = _get_page(item)
+                if page is not None:
+                    entry["pages"].append(page)
+
+    while len(stack) > 1:
+        _finalise(stack[-1])
+        stack.pop()
+
+    def _propagate(node: TreeNode) -> None:
+        for child in node.children:
+            _propagate(child)
+        if node.children:
+            node.content = ""
+            child_pages = [p for c in node.children
+                           for p in [c.start_page, c.end_page] if p is not None]
+            if child_pages:
+                node.start_page = min(
+                    [p for p in [node.start_page] + child_pages if p is not None],
+                    default=None,
+                )
+                node.end_page = max(
+                    [p for p in [node.end_page] + child_pages if p is not None],
+                    default=None,
+                )
+            if llm_client is not None:
+                node.summary = _make_summary(node, llm_client)
+
+    for root in roots:
+        _propagate(root)
+
+    return roots
+
+
+def _build_from_cn_headings(
+    items: list[tuple[str, dict]],
+    doc_title: str,
+    llm_client,
+) -> list[TreeNode]:
+    """Build leaf nodes from Chinese-numbered headings (一、二、三、).
+
+    Text and inline tables between headings become each section's content.
+    Content before the first heading is collected as a pre-section; if non-empty
+    it becomes the first leaf titled with the document name.
+    """
+    sections: list[tuple[str | None, list[tuple[str, dict]]]] = []
+    current_heading: str | None = None
+    current_items: list[tuple[str, dict]] = []
+
+    for kind, item in items:
+        if kind == "text" and _is_cn_heading(item.get("text", "")):
+            sections.append((current_heading, current_items))
+            current_heading = item["text"].strip()
+            current_items = []
+        else:
+            current_items.append((kind, item))
+    sections.append((current_heading, current_items))
+
+    nodes: list[TreeNode] = []
+    _id = [0]
+
+    def _nid() -> str:
+        _id[0] += 1
+        return f"cn_{_id[0]}"
+
+    for heading, section_items in sections:
+        parts: list[str] = []
+        for kind, item in section_items:
+            if kind == "text":
+                t = (item.get("text") or "").strip()
+                if t and not _is_cn_heading(t):
+                    parts.append(t)
+            elif kind == "table":
+                grid = item.get("data", {}).get("grid", [])
+                if grid:
+                    parts.append(_table_to_markdown(grid))
+        content = "\n".join(parts)
+        title = heading if heading is not None else doc_title
+        if not content and heading is None:
+            continue  # skip empty pre-section
+        nodes.append(TreeNode(
+            node_id=_nid(), title=title,
+            start_page=None, end_page=None,
+            summary="", content=content, children=[],
+        ))
+
+    if llm_client and len(nodes) > 1:
+        # Non-leaf root will be created in build_word_tree; nothing to summarise here
+        pass
+
+    return nodes
+
+
+def _build_from_tables(
+    items: list[tuple[str, dict]],
+    doc_title: str,
+) -> list[TreeNode]:
+    """Build tree from table structure when no heading signals exist.
+
+    CHART tables are skipped; their semantic content comes from surrounding body texts.
+    Multiple non-CHART tables each contribute their own nodes.
+    Surrounding body texts are prepended to the content of a single-leaf result.
+    """
+    pre_texts: list[str] = []
+    all_nodes: list[TreeNode] = []
+    found_table = False
+    post_texts: list[str] = []
+
+    for kind, item in items:
+        if kind == "text":
+            t = (item.get("text") or "").strip()
+            if not t:
+                continue
+            if not found_table:
+                pre_texts.append(t)
+            else:
+                post_texts.append(t)
+        elif kind == "table":
+            grid = item.get("data", {}).get("grid", [])
+            if not grid:
+                continue
+            found_table = True
+            tbl_nodes = _table_to_nodes(grid, doc_title)
+            all_nodes.extend(tbl_nodes)
+
+    surrounding_text = "\n".join(pre_texts + post_texts)
+
+    if not all_nodes:
+        # Tables were CHART (returned []) or absent — use body texts only
+        if not surrounding_text:
+            return []
+        return [TreeNode(
+            node_id="leaf_0", title=doc_title,
+            start_page=None, end_page=None,
+            summary="", content=surrounding_text, children=[],
+        )]
+
+    if len(all_nodes) == 1 and surrounding_text:
+        # Merge surrounding text into the single leaf
+        leaf = all_nodes[0]
+        merged = (surrounding_text + "\n" + leaf.content).strip()
+        all_nodes[0] = TreeNode(
+            node_id=leaf.node_id, title=leaf.title,
+            start_page=None, end_page=None,
+            summary="", content=merged, children=leaf.children,
+        )
+
+    return all_nodes
+
+
 _SUMMARY_SYSTEM = "你是醫療文件助理。"
 _SUMMARY_USER_TEMPLATE = (
     "用一句繁體中文（50字以內）摘要以下章節群的主要內容：\n\n{content}"
@@ -248,127 +483,81 @@ def _make_summary(node: TreeNode, llm_client) -> str:
 def build_word_tree(raw: dict, llm_client: "LLMClient | None" = None) -> TreeNode | None:
     """Build a TreeNode hierarchy from a Docling Word raw document.
 
-    Parses data.texts[] produced by docling's export_to_dict().
-    section_header items define the tree structure via their `level` field (int 1-6).
-    text / list_item items are body content for the current heading node.
-    Returns None if texts[] is absent or produces no usable nodes.
+    Walks body.children in document order (falls back to texts[] for legacy test data).
+    Dispatches to one of three strategies:
+      1. section_header stack  — when label="section_header" items exist
+      2. Chinese-number headings — when 一、二、三、 patterns exist
+      3. Table-type-based       — for pure form documents
+    Returns None if no usable content is found.
     """
-    texts = raw.get("data", {}).get("texts", [])
-    if not texts:
-        return None
-
-    node_counter = [0]
-
-    def _new_id() -> str:
-        node_counter[0] += 1
-        return f"word_{node_counter[0]}"
-
-    # Stack entries: {"level": int, "node": TreeNode | None, "body": list[str], "pages": list[int]}
-    # Index 0 is virtual root sentinel (level=0, node=None)
-    stack: list[dict] = [{"level": 0, "node": None, "body": [], "pages": []}]
-    roots: list[TreeNode] = []
-
-    def _finalise(entry: dict) -> None:
-        node = entry["node"]
-        if node is None:
-            return
-        all_p = [p for p in [node.start_page] + entry["pages"] if p is not None]
-        if node.is_leaf:
-            node.content = "\n".join(entry["body"])
-        node.start_page = min(all_p) if all_p else None
-        node.end_page = max(all_p) if all_p else None
-
-    for item in texts:
-        label = item.get("label", "")
-        text = (item.get("text") or "").strip()
-        if not text:
-            continue
-
-        if label == "section_header":
-            level = int(item.get("level") or 1)
-            page = _get_page(item)
-
-            while len(stack) > 1 and stack[-1]["level"] >= level:
-                _finalise(stack[-1])
-                stack.pop()
-
-            new_node = TreeNode(
-                node_id=_new_id(),
-                title=text,
-                start_page=page,
-                end_page=page,
-                summary="",
-                content="",
-                children=[],
-            )
-
-            parent = stack[-1]["node"]
-            if parent is not None:
-                parent.children.append(new_node)
-            else:
-                roots.append(new_node)
-
-            pages = [page] if page is not None else []
-            stack.append({"level": level, "node": new_node, "body": [], "pages": pages})
-
-        elif label in _BODY_LABELS:
-            if len(stack) > 1:
-                entry = stack[-1]
-                entry["body"].append(text)
-                page = _get_page(item)
-                if page is not None:
-                    entry["pages"].append(page)
-
-    while len(stack) > 1:
-        _finalise(stack[-1])
-        stack.pop()
-
-    if not roots:
-        return None
-
-    def _propagate(node: TreeNode) -> None:
-        for child in node.children:
-            _propagate(child)
-
-        if node.children:
-            node.content = ""
-            child_pages: list[int] = []
-            for child in node.children:
-                if child.start_page is not None:
-                    child_pages.append(child.start_page)
-                if child.end_page is not None:
-                    child_pages.append(child.end_page)
-            if child_pages:
-                node.start_page = min(
-                    [p for p in [node.start_page] + child_pages if p is not None],
-                    default=None,
-                )
-                node.end_page = max(
-                    [p for p in [node.end_page] + child_pages if p is not None],
-                    default=None,
-                )
-            if llm_client is not None:
-                node.summary = _make_summary(node, llm_client)
-
-    for root in roots:
-        _propagate(root)
-
-    if len(roots) == 1:
-        return roots[0]
+    data = raw.get("data", {})
+    texts = data.get("texts", [])
+    tables = data.get("tables", [])
+    pictures = data.get("pictures", [])
+    groups_list = data.get("groups", [])
+    body = data.get("body", {})
+    body_children_refs = [c["$ref"] for c in body.get("children", [])]
 
     file_name = raw.get("metadata", {}).get("file_name", "文件")
-    all_pages: list[int] = []
-    for r in roots:
-        if r.start_page is not None:
-            all_pages.append(r.start_page)
-        if r.end_page is not None:
-            all_pages.append(r.end_page)
-    return TreeNode(
+    doc_title = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
+
+    # Build ref_map for O(1) lookups
+    ref_map: dict[str, tuple[str, dict]] = {}
+    for i, t in enumerate(texts):
+        ref_map[f"#/texts/{i}"] = ("text", t)
+    for i, tbl in enumerate(tables):
+        ref_map[f"#/tables/{i}"] = ("table", tbl)
+    for i, pic in enumerate(pictures):
+        ref_map[f"#/pictures/{i}"] = ("picture", pic)
+    for i, grp in enumerate(groups_list):
+        ref_map[f"#/groups/{i}"] = ("group", grp)
+
+    if body_children_refs:
+        ordered_items = _flatten_body_refs(body_children_refs, ref_map)
+    else:
+        # Legacy path: body.children absent (older test data without body structure)
+        ordered_items = [
+            ("text", t) for t in texts
+            if t.get("content_layer") != "furniture"
+        ]
+
+    if not ordered_items:
+        return None
+
+    # Dispatch to strategy
+    has_section_headers = any(
+        kind == "text" and item.get("label") == "section_header"
+        for kind, item in ordered_items
+    )
+    has_cn_headings = any(
+        kind == "text" and _is_cn_heading(item.get("text", ""))
+        for kind, item in ordered_items
+    )
+
+    if has_section_headers:
+        nodes = _build_from_section_headers(ordered_items, doc_title, llm_client)
+    elif has_cn_headings:
+        nodes = _build_from_cn_headings(ordered_items, doc_title, llm_client)
+    else:
+        nodes = _build_from_tables(ordered_items, doc_title)
+
+    if not nodes:
+        return None
+
+    if len(nodes) == 1:
+        return nodes[0]
+
+    # Multiple roots → wrap in virtual root
+    all_pages = [p for n in nodes for p in [n.start_page, n.end_page] if p is not None]
+    virtual_root = TreeNode(
         node_id="root",
         title=file_name,
         start_page=min(all_pages) if all_pages else None,
         end_page=max(all_pages) if all_pages else None,
         summary="",
         content="",
-        children=roots,
+        children=nodes,
     )
+    if llm_client is not None:
+        virtual_root.summary = _make_summary(virtual_root, llm_client)
+    return virtual_root

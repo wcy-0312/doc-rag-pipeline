@@ -409,3 +409,156 @@ class TestTableToNodes:
         assert "| A | B |" in md
         assert "|---|---|" in md
         assert "| x | y |" in md
+
+
+# ── Body walker integration ───────────────────────────────────────────────────
+
+def _make_text(text: str, label: str = "text", layer: str = "body") -> dict:
+    return {"text": text, "label": label, "content_layer": layer, "prov": []}
+
+
+def _make_table(grid: list, layer: str = "body") -> dict:
+    return {"content_layer": layer, "data": {"grid": grid}}
+
+
+def _make_raw_body(body_refs: list[str],
+                   texts: list | None = None,
+                   tables: list | None = None,
+                   groups: list | None = None,
+                   file_name: str = "doc.docx") -> dict:
+    """Build raw dict with explicit body.children refs."""
+    return {
+        "metadata": {"file_name": file_name},
+        "data": {
+            "texts": texts or [],
+            "tables": tables or [],
+            "pictures": [],
+            "groups": groups or [],
+            "body": {"children": [{"$ref": r} for r in body_refs]},
+        },
+    }
+
+
+class TestBodyWalker:
+    def test_furniture_items_excluded(self):
+        texts = [
+            _make_text("主要內容", layer="body"),
+            _make_text("頁首頁尾", layer="furniture"),
+        ]
+        raw = _make_raw_body(["#/texts/0", "#/texts/1"], texts=texts)
+        tree = build_word_tree(raw)
+        assert tree is not None
+        assert "頁首頁尾" not in (tree.content or "")
+
+    def test_matrix_table_builds_children(self):
+        grid = [
+            _hdr("類別", "2月", "4月"),
+            _row("基數查核", "正確", "不正確"),
+            _row("有效期限", "期限內", "2個月內"),
+        ]
+        tbl = _make_table(grid)
+        raw = _make_raw_body(["#/tables/0"], tables=[tbl])
+        tree = build_word_tree(raw)
+        assert tree is not None
+        assert len(tree.children) == 2
+        assert tree.children[0].title == "基數查核"
+        assert tree.children[1].title == "有效期限"
+
+    def test_record_table_single_leaf(self):
+        grid = [
+            _hdr("日期", "1", "2"),
+            _row("/", "", ""),
+            _row("診斷：", "", ""),
+        ]
+        tbl = _make_table(grid)
+        raw = _make_raw_body(["#/tables/0"], tables=[tbl], file_name="記錄單.docx")
+        tree = build_word_tree(raw)
+        assert tree is not None
+        assert tree.is_leaf
+        assert tree.title == "記錄單"
+
+    def test_chart_table_falls_back_to_body_texts(self):
+        texts = [
+            _make_text("注意事項："),
+            _make_text("溫度異常時立即處理"),
+        ]
+        grid = [
+            _hdr("溫度", "1"),
+            _row("14", ""),
+            _row("8", ""),
+        ]
+        tbl = _make_table(grid)
+        raw = _make_raw_body(
+            ["#/texts/0", "#/texts/1", "#/tables/0"],
+            texts=texts, tables=[tbl],
+        )
+        tree = build_word_tree(raw)
+        assert tree is not None
+        assert tree.is_leaf
+        assert "注意事項" in tree.content
+        assert "溫度異常" in tree.content
+
+    def test_cn_heading_creates_sections(self):
+        texts = [
+            _make_text("一、指標現況分析"),
+            _make_text("請描述趨勢變化"),
+            _make_text("二、原因分析"),
+            _make_text("分析相關因素"),
+        ]
+        raw = _make_raw_body(
+            [f"#/texts/{i}" for i in range(4)],
+            texts=texts,
+        )
+        tree = build_word_tree(raw)
+        assert tree is not None
+        assert len(tree.children) == 2
+        assert "一、指標現況分析" in tree.children[0].title
+        assert "請描述" in tree.children[0].content
+        assert "二、原因分析" in tree.children[1].title
+
+    def test_cn_heading_with_inline_table(self):
+        texts = [
+            _make_text("一、現況"),
+            _make_text("描述現況"),
+            _make_text("二、原因"),
+        ]
+        grid = [_hdr("季別", "數值"), _row("第一季", ""), _row("第二季", "")]
+        tbl = _make_table(grid)
+        raw = _make_raw_body(
+            ["#/texts/0", "#/texts/1", "#/tables/0", "#/texts/2"],
+            texts=texts, tables=[tbl],
+        )
+        tree = build_word_tree(raw)
+        assert tree is not None
+        assert len(tree.children) == 2
+        # table markdown should be in section 1 content
+        assert "|" in tree.children[0].content
+
+    def test_group_children_expanded(self):
+        """Group refs are recursively expanded into their children."""
+        texts = [_make_text("群組內文字")]
+        group = {"content_layer": "body", "children": [{"$ref": "#/texts/0"}]}
+        raw = _make_raw_body(["#/groups/0"], texts=texts, groups=[group])
+        tree = build_word_tree(raw)
+        assert tree is not None
+        assert "群組內文字" in tree.content
+
+    def test_furniture_table_excluded(self):
+        grid = [_hdr("中山醫學大學附設醫院", "名稱"), _row("Chung Shan", "制定單位")]
+        tbl = _make_table(grid, layer="furniture")
+        raw = _make_raw_body(["#/tables/0"], tables=[tbl])
+        tree = build_word_tree(raw)
+        assert tree is None
+
+    def test_existing_section_header_path_unchanged(self):
+        """The 20 existing tests used data.texts[] with no body.children — must still pass."""
+        # This is verified by running the full test suite.
+        # Explicitly confirm the legacy fallback works:
+        raw = _raw([
+            _heading("章節A", level=1, page=1),
+            _body("內容A", page=1),
+        ])
+        tree = build_word_tree(raw)
+        assert tree is not None
+        assert tree.title == "章節A"
+        assert "內容A" in tree.content
