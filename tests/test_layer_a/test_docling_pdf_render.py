@@ -1,5 +1,6 @@
 """Tests for DOCX→PDF render path added to docling_extractor."""
 import pytest
+import importlib.util
 from pathlib import Path
 
 
@@ -7,24 +8,22 @@ _SAMPLE_DOCX = Path(
     "docs/作業常規(SOP)/Q16-品管組/"
     "護理部_A31000-Q16-F-B12_急救護理用品基數效期查核表-2.1版.docx"
 )
+_DOCLING_AVAILABLE = importlib.util.find_spec("docling") is not None
 
 
-@pytest.mark.skipif(not _SAMPLE_DOCX.exists(), reason="sample file not found")
+@pytest.mark.skipif(
+    not _SAMPLE_DOCX.exists() or not _DOCLING_AVAILABLE,
+    reason="sample file or docling not found"
+)
 class TestDocxToPdfConversion:
     def test_pdf_path_key_present_in_output(self):
         """convert_word_docling output always has pdf_path_for_render key."""
-        import sys
-        sys.path.insert(0, ".")
-        sys.path.insert(0, "layer_a")
         from layer_a.docling_extractor import convert_word_docling
         raw = convert_word_docling(_SAMPLE_DOCX)
         assert "pdf_path_for_render" in raw["data"]
 
     def test_pdf_file_exists_when_conversion_succeeds(self):
         """pdf_path_for_render points to an existing .pdf file."""
-        import sys
-        sys.path.insert(0, ".")
-        sys.path.insert(0, "layer_a")
         from layer_a.docling_extractor import convert_word_docling
         raw = convert_word_docling(_SAMPLE_DOCX)
         pdf_path = raw["data"]["pdf_path_for_render"]
@@ -35,9 +34,6 @@ class TestDocxToPdfConversion:
 
     def test_pdf_renderable_by_pymupdf(self):
         """The produced PDF can be opened and rendered by fitz."""
-        import sys
-        sys.path.insert(0, ".")
-        sys.path.insert(0, "layer_a")
         from layer_a.docling_extractor import convert_word_docling
         raw = convert_word_docling(_SAMPLE_DOCX)
         pdf_path = raw["data"]["pdf_path_for_render"]
