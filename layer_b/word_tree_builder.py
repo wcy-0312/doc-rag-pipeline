@@ -22,7 +22,7 @@ class _TableType(Enum):
 # Matches field-descriptor labels common in transposed-record tables:
 #   "日期/班別/", "不符合項目", "處理對策", "再確認", "稽核人員\n簽名"
 _FIELD_LABEL_RE = _re.compile(
-    r'[/／]|項目$|對策$|確認$|簽名$|編號$|記錄$|說明$', _re.MULTILINE
+    r'[/／]|[：:]$|項目$|對策$|確認$|簽名$|編號$|記錄$|說明$', _re.MULTILINE
 )
 
 
@@ -139,22 +139,10 @@ def _table_to_nodes(grid: list[list[dict]], doc_title: str) -> list[TreeNode]:
         _id[0] += 1
         return f"tbl_{_id[0]}"
 
-    # If MATRIX but contains placeholder symbols in col0, treat as RECORD
-    # (indicates form-like table structure)
-    if ttype == _TableType.MATRIX and data:
-        has_placeholders = False
-        for row in data:
-            c0 = row[0].get("text", "").strip()
-            if _re.match(r'^[/：:\s，、\-\n]+$', c0):
-                has_placeholders = True
-                break
-        if has_placeholders:
-            ttype = _TableType.RECORD
-
     if ttype == _TableType.CHART:
         return []
 
-    if ttype in (_TableType.RECORD,):
+    if ttype == _TableType.RECORD:
         return [TreeNode(
             node_id=_nid(),
             title=doc_title,
@@ -205,8 +193,7 @@ def _table_to_nodes(grid: list[list[dict]], doc_title: str) -> list[TreeNode]:
         return nodes
 
     if ttype == _TableType.LONGITUDINAL:
-        from collections import OrderedDict
-        categories: OrderedDict[str, list[str]] = OrderedDict()
+        categories: dict[str, list[str]] = {}
         for row in data:
             c0 = row[0].get("text", "").strip()
             c1 = row[1].get("text", "").strip() if len(row) > 1 else ""
