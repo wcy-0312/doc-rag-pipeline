@@ -37,7 +37,7 @@ def _col0_texts(grid: list[list[dict]]) -> list[str]:
 
 
 def _is_numeric(s: str) -> bool:
-    return bool(_re.match(r'^-?\d+\.?\d*\n?$', s.strip()))
+    return bool(_re.match(r'^-?\d+\.?\d*$', s.strip()))
 
 
 def _is_sequential_int(values: list[str]) -> bool:
@@ -64,7 +64,7 @@ def _is_nav_label(text: str) -> bool:
     if _re.match(r'^[/：:\s，、\-\n]+$', s):
         return False
     # Pure number
-    if _re.match(r'^-?\d+\.?\d*\n?$', s):
+    if _is_numeric(s):
         return False
     return True
 
