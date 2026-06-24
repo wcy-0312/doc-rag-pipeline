@@ -249,6 +249,36 @@ def _flatten_body_refs(refs: list[str], ref_map: dict) -> list[tuple[str, dict]]
     return result
 
 
+# ── Summary constants and helpers ────────────────────────────────────────────
+
+_SUMMARY_SYSTEM = "你是醫療文件助理。"
+_SUMMARY_USER_TEMPLATE = (
+    "用一句繁體中文（50字以內）摘要以下章節群的主要內容：\n\n{content}"
+)
+
+_BODY_LABELS = {"text", "list_item"}
+
+
+def _get_page(item: dict) -> int | None:
+    prov = item.get("prov", [])
+    return prov[0].get("page_no") if prov else None
+
+
+def _make_summary(node: TreeNode, llm_client) -> str:
+    context_parts: list[str] = []
+    for child in node.children:
+        line = f"【{child.title}】" if child.title else ""
+        detail = child.summary or child.content[:200]
+        if line or detail:
+            context_parts.append(f"{line} {detail}".strip())
+    if not context_parts:
+        return ""
+    prompt = _SUMMARY_USER_TEMPLATE.format(content="\n".join(context_parts))
+    return llm_client.generate_text(prompt, system=_SUMMARY_SYSTEM)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _build_from_section_headers(
     items: list[tuple[str, dict]],
     doc_title: str,
@@ -390,10 +420,6 @@ def _build_from_cn_headings(
             summary="", content=content, children=[],
         ))
 
-    if llm_client and len(nodes) > 1:
-        # Non-leaf root will be created in build_word_tree; nothing to summarise here
-        pass
-
     return nodes
 
 
@@ -452,32 +478,6 @@ def _build_from_tables(
         )
 
     return all_nodes
-
-
-_SUMMARY_SYSTEM = "你是醫療文件助理。"
-_SUMMARY_USER_TEMPLATE = (
-    "用一句繁體中文（50字以內）摘要以下章節群的主要內容：\n\n{content}"
-)
-
-_BODY_LABELS = {"text", "list_item"}
-
-
-def _get_page(item: dict) -> int | None:
-    prov = item.get("prov", [])
-    return prov[0].get("page_no") if prov else None
-
-
-def _make_summary(node: TreeNode, llm_client) -> str:
-    context_parts: list[str] = []
-    for child in node.children:
-        line = f"【{child.title}】" if child.title else ""
-        detail = child.summary or child.content[:200]
-        if line or detail:
-            context_parts.append(f"{line} {detail}".strip())
-    if not context_parts:
-        return ""
-    prompt = _SUMMARY_USER_TEMPLATE.format(content="\n".join(context_parts))
-    return llm_client.generate_text(prompt, system=_SUMMARY_SYSTEM)
 
 
 def build_word_tree(raw: dict, llm_client: "LLMClient | None" = None) -> TreeNode | None:
