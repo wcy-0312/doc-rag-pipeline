@@ -106,6 +106,130 @@ def _classify_table(grid: list[list[dict]]) -> _TableType:
 
     return _TableType.MATRIX
 
+
+# ── Table → TreeNode conversion ──────────────────────────────────────────────
+
+_INDEX_CHUNK = 30  # rows per INDEX leaf
+
+
+def _table_to_markdown(grid: list[list[dict]]) -> str:
+    """Convert docling table grid to GitHub-flavored markdown table string."""
+    if not grid:
+        return ""
+    lines: list[str] = []
+    for r, row in enumerate(grid):
+        cells = [cell.get("text", "").replace("\n", " ").strip() for cell in row]
+        lines.append("| " + " | ".join(cells) + " |")
+        if r == 0:
+            lines.append("|" + "|".join(["---"] * len(row)) + "|")
+    return "\n".join(lines)
+
+
+def _table_to_nodes(grid: list[list[dict]], doc_title: str) -> list[TreeNode]:
+    """Convert a table grid to TreeNodes according to its classified type.
+
+    CHART returns [] — its semantic content lives in surrounding body texts.
+    All returned nodes have start_page=None and summary="" (Word has no page numbers).
+    """
+    ttype = _classify_table(grid)
+    data = _data_rows(grid)
+    _id = [0]
+
+    def _nid() -> str:
+        _id[0] += 1
+        return f"tbl_{_id[0]}"
+
+    # If MATRIX but contains placeholder symbols in col0, treat as RECORD
+    # (indicates form-like table structure)
+    if ttype == _TableType.MATRIX and data:
+        has_placeholders = False
+        for row in data:
+            c0 = row[0].get("text", "").strip()
+            if _re.match(r'^[/：:\s，、\-\n]+$', c0):
+                has_placeholders = True
+                break
+        if has_placeholders:
+            ttype = _TableType.RECORD
+
+    if ttype == _TableType.CHART:
+        return []
+
+    if ttype in (_TableType.RECORD,):
+        return [TreeNode(
+            node_id=_nid(),
+            title=doc_title,
+            start_page=None, end_page=None,
+            summary="",
+            content=_table_to_markdown(grid),
+            children=[],
+        )]
+
+    if ttype == _TableType.INDEX:
+        nodes: list[TreeNode] = []
+        for i in range(0, len(data), _INDEX_CHUNK):
+            chunk = data[i:i + _INDEX_CHUNK]
+            seq_start = chunk[0][0].get("text", "").strip()
+            seq_end = chunk[-1][0].get("text", "").strip()
+            nodes.append(TreeNode(
+                node_id=_nid(),
+                title=f"{doc_title} ({seq_start}–{seq_end})",
+                start_page=None, end_page=None,
+                summary="",
+                content=_table_to_markdown([grid[0]] + chunk),
+                children=[],
+            ))
+        return nodes
+
+    if ttype == _TableType.MATRIX:
+        nodes = []
+        for row in data:
+            c0 = row[0].get("text", "").strip()
+            if not c0:
+                continue
+            # Skip placeholder-like symbols in MATRIX (e.g., "/" or "：")
+            if _re.match(r'^[/：:\s，、\-\n]+$', c0):
+                continue
+            content_parts = [
+                cell.get("text", "").strip()
+                for cell in row[1:]
+                if cell.get("text", "").strip()
+            ]
+            nodes.append(TreeNode(
+                node_id=_nid(),
+                title=c0,
+                start_page=None, end_page=None,
+                summary="",
+                content="\n".join(content_parts),
+                children=[],
+            ))
+        return nodes
+
+    if ttype == _TableType.LONGITUDINAL:
+        from collections import OrderedDict
+        categories: OrderedDict[str, list[str]] = OrderedDict()
+        for row in data:
+            c0 = row[0].get("text", "").strip()
+            c1 = row[1].get("text", "").strip() if len(row) > 1 else ""
+            if not c0:
+                continue
+            if c0 not in categories:
+                categories[c0] = []
+            if c1:
+                categories[c0].append(c1)
+        nodes = []
+        for category, sub_items in categories.items():
+            nodes.append(TreeNode(
+                node_id=_nid(),
+                title=category,
+                start_page=None, end_page=None,
+                summary="",
+                content="\n".join(sub_items),
+                children=[],
+            ))
+        return nodes
+
+    return []  # fallback (should not reach here)
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 _SUMMARY_SYSTEM = "你是醫療文件助理。"

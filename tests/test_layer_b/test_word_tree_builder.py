@@ -312,3 +312,100 @@ class TestClassifyTable:
     def test_single_header_row_returns_record(self):
         grid = [_hdr("類別", "內容")]
         assert _classify_table(grid) == _TableType.RECORD
+
+
+# ── Table → TreeNode strategies ───────────────────────────────────────────────
+
+from layer_b.word_tree_builder import _table_to_nodes, _table_to_markdown
+
+
+class TestTableToNodes:
+    def test_matrix_one_leaf_per_data_row(self):
+        grid = [
+            _hdr("類別", "2月", "4月"),
+            _row("基數查核", "正確", "不正確"),
+            _row("有效期限", "期限內", "2個月內"),
+            _row("備用量適當性", "適當", "增加"),
+        ]
+        nodes = _table_to_nodes(grid, "查核表")
+        assert len(nodes) == 3
+        assert nodes[0].title == "基數查核"
+        assert "正確" in nodes[0].content
+        assert "不正確" in nodes[0].content
+        assert nodes[1].title == "有效期限"
+        assert nodes[2].title == "備用量適當性"
+        for n in nodes:
+            assert n.is_leaf
+            assert n.summary == ""
+            assert n.start_page is None
+
+    def test_matrix_skips_empty_col0_rows(self):
+        grid = [
+            _hdr("類別", "值"),
+            _row("有意義", "abc"),
+            _row("", "xyz"),  # empty col=0 → skip
+        ]
+        nodes = _table_to_nodes(grid, "表")
+        assert len(nodes) == 1
+        assert nodes[0].title == "有意義"
+
+    def test_longitudinal_groups_by_category(self):
+        grid = [
+            _hdr("類別", "項目"),
+            _row("皮膚外觀", "大小"),
+            _row("皮膚外觀", "腫脹"),
+            _row("皮膚外觀", "水泡"),
+            _row("傷口照護", "Tegaderm"),
+            _row("傷口照護", "Duoderm"),
+        ]
+        nodes = _table_to_nodes(grid, "追蹤表")
+        assert len(nodes) == 2
+        assert nodes[0].title == "皮膚外觀"
+        assert "大小" in nodes[0].content
+        assert "腫脹" in nodes[0].content
+        assert "水泡" in nodes[0].content
+        assert nodes[1].title == "傷口照護"
+        assert "Tegaderm" in nodes[1].content
+
+    def test_record_single_leaf_with_full_table(self):
+        grid = [
+            _hdr("日期", "1", "2"),
+            _row("/", "", ""),
+            _row("診斷：", "", ""),
+        ]
+        nodes = _table_to_nodes(grid, "記錄單")
+        assert len(nodes) == 1
+        assert nodes[0].title == "記錄單"
+        assert nodes[0].is_leaf
+        assert "|" in nodes[0].content  # markdown table
+
+    def test_chart_returns_empty_list(self):
+        grid = [
+            _hdr("溫度", "1", "2"),
+            _row("14", "", ""),
+            _row("8", "", ""),
+            _row("-2", "", ""),
+        ]
+        nodes = _table_to_nodes(grid, "溫度記錄")
+        assert nodes == []
+
+    def test_index_chunks_into_groups_of_30(self):
+        data = [_row(str(i), f"A{i:02d}", f"表單{i}") for i in range(1, 65)]
+        grid = [_hdr("序號", "編號", "名稱")] + data
+        nodes = _table_to_nodes(grid, "表單目錄")
+        assert len(nodes) == 3         # ceil(64/30) = 3
+        assert "1" in nodes[0].title
+        assert "30" in nodes[0].title
+        assert "31" in nodes[1].title
+        assert "60" in nodes[1].title
+        assert "|" in nodes[0].content  # markdown table
+
+    def test_table_to_markdown_produces_pipe_table(self):
+        grid = [
+            _hdr("A", "B"),
+            _row("x", "y"),
+        ]
+        md = _table_to_markdown(grid)
+        assert "| A | B |" in md
+        assert "|---|---|" in md
+        assert "| x | y |" in md
